@@ -11,7 +11,7 @@ import { richBody, richHasImage } from './richdoc';
 import { imageBytes, imgType } from './images';
 import { effectiveStyle, wordLatinFont } from './fonts';
 import { paperLabels, type LabelKey } from './labels';
-import { answerLabel } from './renderHtml';
+import { answerLabel } from './labels';
 
 const CONTENT_WIDTH = 9906; // A4 width (11906 twips) minus 1000 twip margins
 const COLUMN_GAP = 400;

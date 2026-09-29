@@ -3,7 +3,10 @@ import { esc, letter, seededOrder } from './util';
 import { asOptions, asPairs, asParts, asText, fieldValue, effectiveLayout, lockedView, optionColumns, optionGrid, partLabel, resolvePaper, secondKey, sectionInstruction, type ResolvedQuestion } from './paper';
 import { renderRich, renderRichInline, richHasImage } from './richdoc';
 import { effectiveStyle, styleVars } from './fonts';
-import { paperLabels, type LabelKey } from './labels';
+import { answerLabel, paperLabels, type LabelKey } from './labels';
+import { paperToBox } from './boxMigrate';
+import { marksOf } from './box';
+import { BOX_CSS, renderBody } from './renderBox';
 
 // Every size is relative to --fs (body size) so the font-size setting scales the whole paper.
 export const PAPER_CSS = `
@@ -61,6 +64,7 @@ export const PAPER_CSS = `
 .qp .drawbox { border: 1px solid #000; margin: 4pt 0; }
 .qp hr { border: 0; border-top: 1px solid #000; margin: 4pt 0; }
 .qp .opts > div > .t2, .qp .ans > .t2 { margin-top: 0; }
+${BOX_CSS}
 .qp .end { text-align: center; margin-top: 18px; font-weight: 600; clear: both; }
 /* images */
 .qp img.qi { max-width: 100%; height: auto; }
@@ -90,9 +94,6 @@ interface Ctx {
   sectionLayout?: QuestionLayout;
 }
 
-/** Built-in answer fields print as "Answer"/"Model answer" in the paper's language; custom ones keep their label. */
-export const answerLabel = (template: Template, label: string, L: (k: LabelKey) => string) =>
-  !template.builtin ? label : /model/i.test(label) ? L('modelAnswer') : L('answer');
 
 function renderFields(q: QLike, template: Template, ctx: Ctx): string {
   const { db, answerKey, answerSpace, bilingual, L } = ctx;
@@ -176,10 +177,10 @@ export function renderPaperHtml(paper: Paper, liveDb: DB, answerKey: boolean) {
   const db = lockedView(paper, liveDb);
   const { settings: s } = db;
   const rich = (t: string) => renderRich(t, db.images);
-  const { sections, totalMarks, missing } = resolvePaper(paper, db);
+  const body = paper.body ?? paperToBox(paper, liveDb);
+  const totalMarks = marksOf(body);
   const style = effectiveStyle(s.paperStyle, paper.style);
   const L = paperLabels(paper.labelLang);
-  const ctx: Ctx = { db, answerKey, answerSpace: paper.answerSpace, bilingual: !!paper.bilingual, L };
   const header = `
     <div class="hd">
       <div class="hd-top">
@@ -193,21 +194,7 @@ export function renderPaperHtml(paper: Paper, liveDb: DB, answerKey: boolean) {
     </div>
     <div class="meta"><span>${L('class')}: ${esc(paper.className)}</span><span>${L('subject')}: ${esc(paper.subject)}</span></div>
     <div class="meta"><span>${L('time')}: ${esc(paper.duration)}</span>${paper.date ? `<span>${L('date')}: ${esc(paper.date)}</span>` : ''}<span>${L('maxMarks')}: ${totalMarks}</span></div>`;
-  const instructions = paper.instructions.trim()
-    ? `<div class="gi"><div class="gi-title">${L('instructions')}:</div><div class="gi-b">${rich(paper.instructions.trim())}</div></div>`
-    : '';
-  const body = sections
-    .map((sec) => {
-      const instr = sectionInstruction(sec);
-      return `
-    <div class="sec">
-      ${sec.title || sec.marksLabel ? `<div class="sec-h"><span>${esc(sec.title)}</span><span>${esc(sec.marksLabel)}</span></div>` : ''}
-      ${instr ? `<div class="sec-i">${rich(instr)}</div>` : ''}
-      ${sec.questions.map((q) => renderQuestion(q, ctx)).join('')}
-    </div>`;
-    })
-    .join('');
-  const warn = missing ? `<p class="warn">${missing} question(s) in this paper no longer exist in the bank.</p>` : '';
-  const bodyHtml = paper.pageCols === 2 ? `<div class="cols2">${body}</div>` : body;
-  return `<div class="qp" style="${styleVars(style)}">${header}${instructions}${warn}${bodyHtml}<div class="end">${L('end')}</div></div>`;
+  const content = renderBody(body, { images: db.images, answerKey, bilingual: !!paper.bilingual, L });
+  const bodyHtml = paper.pageCols === 2 ? `<div class="cols2">${content}</div>` : content;
+  return `<div class="qp" style="${styleVars(style)}">${header}${bodyHtml}<div class="end">${L('end')}</div></div>`;
 }

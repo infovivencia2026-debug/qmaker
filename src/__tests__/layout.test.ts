@@ -41,6 +41,7 @@ describe('layout precedence', () => {
     expect(html).toContain('repeat(1, minmax(0, 1fr))');
     expect(html).toContain('class="cols2"');
     // down order with 3 columns: first row is a, c, e
-    expect(html.indexOf('(c)</span> c')).toBeLessThan(html.indexOf('(b)</span> b'));
+    expect(html.indexOf('>(c)</div>')).toBeLessThan(html.indexOf('>(b)</div>'));
+    expect(html.indexOf('>(c)</div>')).toBeGreaterThan(-1);
   });
 });

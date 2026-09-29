@@ -108,6 +108,8 @@ export interface Paper {
   pageCols?: 1 | 2;
   /** Print each question's second-language version under it. */
   bilingual?: boolean;
+  /** The paper's content as a tree of Boxes. Older papers (sections) are converted on first open. */
+  body?: import('../lib/box').Box;
   /** A locked (final) paper prints from these copies, so later edits in the bank never change it. */
   locked?: { at: number; questions: Question[]; templates: Template[] };
   /** Target maximum marks for the blueprint (0 = no target). */

@@ -1,3 +1,5 @@
+import type { Template } from '../shared/types';
+
 /** Words printed on the paper itself, in the paper's language (separate from the app's UI language). */
 export type PaperLang = 'en' | 'hi' | 'te' | 'en-hi' | 'en-te';
 
@@ -43,3 +45,7 @@ export function paperLabels(lang: PaperLang = 'en') {
     return `${a} / ${b}`;
   };
 }
+
+/** Built-in answer fields print as "Answer"/"Model answer" in the paper's language; custom ones keep their label. */
+export const answerLabel = (template: Template, label: string, L: (k: LabelKey) => string) =>
+  !template.builtin ? label : /model/i.test(label) ? L('modelAnswer') : L('answer');
