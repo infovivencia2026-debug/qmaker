@@ -20,5 +20,6 @@ contextBridge.exposeInMainWorld('qmaker', {
     return () => ipcRenderer.off('file:opened', listener);
   },
   exportPdf: (html: string, defaultName: string) => ipcRenderer.invoke('pdf:export', html, defaultName),
+  saveImage: (name: string, bytes: Uint8Array) => ipcRenderer.invoke('image:save', name, bytes),
   showInFolder: (p: string) => ipcRenderer.invoke('shell:showInFolder', p),
 });

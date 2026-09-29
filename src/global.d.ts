@@ -15,6 +15,7 @@ interface Window {
     onFileOpened(cb: (f: SharedFile) => void): () => void;
     exportPdf(html: string, defaultName: string): Promise<string | null>;
     showInFolder(p: string): Promise<void>;
+    saveImage(name: string, bytes: Uint8Array): Promise<void>;
   };
   __qmakerPrint?: (html: string) => Promise<boolean>;
 }

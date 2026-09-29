@@ -26,7 +26,8 @@ export default function Bank() {
     .sort((a, b) => b.updatedAt - a.updatedAt);
 
   const remove = (q: Question) => {
-    const usedIn = db.papers.filter((p) => paperQuestionIds(p).includes(q.id));
+    // Locked papers keep their own frozen copy, so only editable papers lose the question.
+    const usedIn = db.papers.filter((p) => !p.locked && paperQuestionIds(p).includes(q.id));
     const msg = usedIn.length ? `This question is used in ${usedIn.length} paper(s) and will be removed from them. ${t('confirmDelete')}` : t('confirmDelete');
     if (!confirm(msg)) return;
     update((db) => ({

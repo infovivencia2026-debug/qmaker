@@ -5,8 +5,9 @@ import {
 } from 'docx';
 import type { DB, ImageAlign, ImageAsset, Paper, Question, Template } from '../shared/types';
 import { letter, seededOrder } from './util';
-import { asOptions, asPairs, asParts, asText, fieldValue, optionColumns, partLabel, resolvePaper, sectionInstruction, type ResolvedQuestion } from './paper';
-import { hasImage, parseRich } from './rich';
+import { asOptions, asPairs, asParts, asText, fieldValue, lockedView, optionColumns, paperQuestionIds, partLabel, resolvePaper, sectionInstruction, type ResolvedQuestion } from './paper';
+import { collectImageIds, hasImage, parseRich } from './rich';
+import { imageBytes, imgType } from './images';
 import { effectiveStyle, wordLatinFont } from './fonts';
 
 const CONTENT_WIDTH = 9906; // A4 width (11906 twips) minus 1000 twip margins
@@ -20,13 +21,12 @@ const ALIGN = { left: AlignmentType.LEFT, center: AlignmentType.CENTER } as cons
 interface Chunk { children: ParagraphChild[]; align?: 'left' | 'center' }
 
 class DocxWriter {
-  private imageCache = new Map<string, Uint8Array>();
   readonly size: number; // half-points
   readonly gap: number; // twips before each question
   private font: { ascii: string; hAnsi: string; eastAsia: string; cs: string };
   readonly templates: Map<string, Template>;
 
-  constructor(private db: DB, paper: Paper) {
+  constructor(private db: DB, paper: Paper, private imageData: Map<string, Uint8Array>) {
     const style = effectiveStyle(db.settings.paperStyle, paper.style);
     this.size = Math.round(style.fontSize * 2);
     this.gap = Math.round(style.questionGap * 20);
@@ -47,14 +47,10 @@ class DocxWriter {
   }
 
   private image(asset: ImageAsset, widthMm: number, align: ImageAlign) {
-    let bytes = this.imageCache.get(asset.id);
-    if (!bytes) {
-      bytes = Uint8Array.from(atob(asset.src.split(',')[1]), (c) => c.charCodeAt(0));
-      this.imageCache.set(asset.id, bytes);
-    }
+    const bytes = this.imageData.get(asset.id) ?? new Uint8Array();
     const width = Math.round(Math.min(widthMm, 170) * PX_PER_MM);
     const height = Math.round((width * asset.h) / asset.w);
-    const type = asset.src.startsWith('data:image/png') ? 'png' : 'jpg';
+    const type = imgType(asset);
     if (align !== 'right') return new ImageRun({ type, data: bytes, transformation: { width, height } });
     return new ImageRun({
       type, data: bytes, transformation: { width, height },
@@ -86,7 +82,7 @@ class DocxWriter {
         continue;
       }
       const asset = this.db.images[seg.id];
-      if (!asset) continue;
+      if (!asset || !this.imageData.has(seg.id)) continue;
       if (flat || seg.align === 'inline' || seg.align === 'right') {
         cur().children.push(this.image(asset, seg.width, flat && seg.align === 'right' ? 'inline' : seg.align));
       } else {
@@ -252,9 +248,17 @@ function questionBlocks(w: DocxWriter, { number, question, template, marks, alt 
   return out;
 }
 
-export async function renderPaperDocx(paper: Paper, db: DB, answerKey: boolean): Promise<Uint8Array> {
+export async function renderPaperDocx(paper: Paper, liveDb: DB, answerKey: boolean): Promise<Uint8Array> {
+  const db = lockedView(paper, liveDb);
   const { settings: s } = db;
-  const w = new DocxWriter(db, paper);
+  // Word needs the picture bytes up front; read every image this paper uses once.
+  const imageData = new Map<string, Uint8Array>();
+  const used = new Set(paperQuestionIds(paper));
+  for (const id of collectImageIds([paper, db.questions.filter((q) => used.has(q.id))])) {
+    const a = db.images[id];
+    if (a) imageData.set(id, await imageBytes(a).catch(() => new Uint8Array()));
+  }
+  const w = new DocxWriter(db, paper, imageData);
   const { sections, totalMarks } = resolvePaper(paper, db);
   const center = (children: ParagraphChild[]) => w.para(children, { alignment: AlignmentType.CENTER });
   const spread = (left: string, right: string) =>

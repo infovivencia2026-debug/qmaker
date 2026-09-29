@@ -26,7 +26,8 @@ export default function Papers() {
     setOpenId(p.id);
   };
   const duplicate = (p: Paper) => {
-    const copy = { ...structuredClone(p), id: uid(), examName: `${p.examName} (copy)`, createdAt: Date.now(), updatedAt: Date.now() };
+    // A copy starts unlocked so it can be edited into next year's paper.
+    const copy = { ...structuredClone(p), locked: undefined, id: uid(), examName: `${p.examName} (copy)`, createdAt: Date.now(), updatedAt: Date.now() };
     update((db) => ({ ...db, papers: [...db.papers, copy] }));
   };
   const remove = (p: Paper) => confirm(t('confirmDelete')) && update((db) => ({ ...db, papers: db.papers.filter((x) => x.id !== p.id) }));
@@ -45,7 +46,7 @@ export default function Papers() {
             const r = resolvePaper(p, db);
             return (
               <tr key={p.id} onDoubleClick={() => setOpenId(p.id)}>
-                <td className="grow"><b>{p.examName || t('untitled')}</b><div className="muted">{[p.className, p.subject].filter(Boolean).join(' · ')}</div></td>
+                <td className="grow"><b>{p.examName || t('untitled')}</b>{p.locked && <span className="tag">🔒 locked</span>}<div className="muted">{[p.className, p.subject].filter(Boolean).join(' · ')}</div></td>
                 <td>{r.sections.reduce((n, s) => n + s.questions.length, 0)} {t('questions')}</td>
                 <td>{r.totalMarks} {t('marks')}</td>
                 <td className="muted">{new Date(p.updatedAt).toLocaleDateString()}</td>

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { serialize, useStore } from '../store';
-import { bankBundle, mergeBundle, parseBundle, type MergeStats } from '../lib/bundle';
+import type { ImageAsset } from '../shared/types';
+import { bankBundle, mergeBundle, parseBundle, storeBundleImages, type MergeStats } from '../lib/bundle';
+import { embedImages, storeImages } from '../lib/images';
 import { safeFileName } from '../lib/util';
 
 export default function Share() {
@@ -14,7 +16,7 @@ export default function Share() {
   const [result, setResult] = useState<(MergeStats & { name: string; papers: number }) | null>(null);
 
   const exportBank = async () => {
-    const bundle = bankBundle(db, subject || null);
+    const bundle = await bankBundle(db, subject || null);
     const name = safeFileName(`${db.settings.institutionName || 'QMaker'} - ${subject || 'All subjects'} - ${new Date().toISOString().slice(0, 10)}`);
     const path = await window.qmaker.saveFile(new TextEncoder().encode(JSON.stringify(bundle)), `${name}.qbank`, 'QMaker Question Bank', 'qbank');
     if (path) setExported(path);
@@ -24,7 +26,7 @@ export default function Share() {
     const f = await window.qmaker.openFile();
     if (!f) return;
     try {
-      const bundle = parseBundle(f.text);
+      const bundle = await storeBundleImages(parseBundle(f.text));
       const r = mergeBundle(db, bundle);
       update((cur) => mergeBundle(cur, bundle).db);
       setResult({ ...r.stats, name: f.name, papers: r.papers });
@@ -35,12 +37,13 @@ export default function Share() {
 
   const saveBackup = async () => {
     const name = safeFileName(`QMaker backup - ${db.settings.institutionName || 'all data'} - ${new Date().toISOString().slice(0, 10)}`);
-    const path = await window.qmaker.saveFile(new TextEncoder().encode(serialize(db)), `${name}.qbackup`, 'QMaker backup', 'qbackup');
+    const withImages = { ...db, images: await embedImages(db.images) };
+    const path = await window.qmaker.saveFile(new TextEncoder().encode(serialize(withImages)), `${name}.qbackup`, 'QMaker backup', 'qbackup');
     if (path) notify(`${t('saved')}: ${path}`, path);
   };
 
   const restore = async (text: string, label: string) => {
-    let data: { questions?: unknown[]; papers?: unknown[] };
+    let data: { questions?: unknown[]; papers?: unknown[]; images?: Record<string, ImageAsset> };
     try {
       data = JSON.parse(text);
     } catch {
@@ -53,7 +56,7 @@ export default function Share() {
     );
     if (!ok) return;
     await window.qmaker.snapshotBackup(serialize(db));
-    replaceDb(data);
+    replaceDb({ ...data, images: await storeImages(data.images) });
     refreshBackups();
     notify(`Restored "${label}". Press Ctrl+Z to undo.`);
   };

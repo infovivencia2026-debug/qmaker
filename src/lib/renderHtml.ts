@@ -1,6 +1,6 @@
 import type { DB, Paper, Question, Template } from '../shared/types';
 import { esc, letter, seededOrder } from './util';
-import { asOptions, asPairs, asParts, asText, fieldValue, optionColumns, partLabel, resolvePaper, sectionInstruction, type ResolvedQuestion } from './paper';
+import { asOptions, asPairs, asParts, asText, fieldValue, lockedView, optionColumns, partLabel, resolvePaper, sectionInstruction, type ResolvedQuestion } from './paper';
 import { hasImage, richHtml } from './rich';
 import { effectiveStyle, styleVars } from './fonts';
 
@@ -19,6 +19,7 @@ export const PAPER_CSS = `
 .qp .gi-title { font-weight: 700; }
 .qp .gi p { margin: 0; white-space: pre-wrap; display: flow-root; }
 .qp .sec { margin-top: calc(var(--gap) + 8pt); }
+.qp .sec-h, .qp .sec-i { break-after: avoid; }
 .qp .sec-h { display: flex; justify-content: space-between; font-weight: 700; border-bottom: 1px solid #000; margin-bottom: 4px; }
 .qp .sec-i { font-style: italic; font-size: calc(var(--fs) * 0.92); margin-bottom: 4px; white-space: pre-wrap; display: flow-root; }
 .qp .q { display: grid; grid-template-columns: 2.2em 1fr auto; gap: 0 6px; margin: var(--gap) 0; break-inside: avoid; }
@@ -120,7 +121,8 @@ function renderQuestion({ number, question: q, template, marks, alt }: ResolvedQ
   return `<div class="either">${main}<div class="or">OR</div>${grid('', renderFields(alt.question, alt.template, db, answerKey, answerSpace), '')}</div>`;
 }
 
-export function renderPaperHtml(paper: Paper, db: DB, answerKey: boolean) {
+export function renderPaperHtml(paper: Paper, liveDb: DB, answerKey: boolean) {
+  const db = lockedView(paper, liveDb);
   const { settings: s } = db;
   const rich = (t: string) => richHtml(t, db.images);
   const { sections, totalMarks, missing } = resolvePaper(paper, db);

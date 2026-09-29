@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  windows:
+    # Builds the real Windows installer and portable folder, installs it, and runs the app's
+    # self-test (renders a Hindi/Telugu/English paper with images to PDF and Word).
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx electron-builder --win --x64 --publish never
+      - run: node scripts/make-share.cjs
+      - run: node scripts/make-portable.cjs
+
+      - name: Install silently and check the desktop icon
+        shell: pwsh
+        run: |
+          Start-Process -FilePath "release\Install QMaker.exe" -ArgumentList '/S' -Wait
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter QMaker.exe | Select-Object -First 1
+          if (-not $exe) { throw "QMaker.exe was not installed" }
+          Write-Host "Installed at $($exe.FullName)"
+          "QMAKER_EXE=$($exe.FullName)" >> $env:GITHUB_ENV
+          $desktop = [Environment]::GetFolderPath('Desktop')
+          if (-not (Test-Path "$desktop\QMaker.lnk")) { throw "Desktop shortcut missing in $desktop" }
+          Write-Host "Desktop shortcut OK"
+
+      - name: Self-test the installed app
+        shell: pwsh
+        run: |
+          $out = "$env:GITHUB_WORKSPACE\smoke\installed"
+          Start-Process -FilePath $env:QMAKER_EXE -ArgumentList '--smoke-test', "`"$out`"" -Wait
+          Get-Content "$out\result.json"
+          $r = Get-Content "$out\result.json" -Raw | ConvertFrom-Json
+          if (-not $r.ok) { throw "Self-test failed: $($r.error)" }
+          foreach ($f in 'smoke-paper.pdf', 'smoke-answer-key.pdf', 'smoke-answer-key.docx') {
+            if ((Get-Item "$out\$f").Length -lt 5000) { throw "$f is too small" }
+          }
+
+      - name: Self-test the portable folder (data must stay inside it)
+        shell: pwsh
+        run: |
+          $dir = Resolve-Path "release\QMaker-Portable"
+          $out = "$env:GITHUB_WORKSPACE\smoke\portable"
+          Start-Process -FilePath "$dir\QMaker.exe" -ArgumentList '--smoke-test', "`"$out`"" -Wait
+          Get-Content "$out\result.json"
+          $r = Get-Content "$out\result.json" -Raw | ConvertFrom-Json
+          if (-not $r.ok) { throw "Self-test failed: $($r.error)" }
+          if ($r.userData -ne "$dir\data") { throw "Portable data went to $($r.userData), expected $dir\data" }
+          Write-Host "Portable data folder OK: $($r.userData)"
+
+      - name: Upload self-test output (PDF and Word to check by eye)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: self-test-output
+          path: |
+            smoke/**/*.pdf
+            smoke/**/*.docx
+            smoke/**/result.json
+          retention-days: 30
+
+      - name: Upload installer folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: QMaker-Share
+          path: release/QMaker-Share
+          retention-days: 30
+
+      - name: Upload portable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: QMaker-Portable
+          path: release/QMaker-Portable-*.zip
+          retention-days: 30

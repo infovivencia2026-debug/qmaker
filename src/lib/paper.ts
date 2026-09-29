@@ -27,7 +27,39 @@ export interface ResolvedSection {
   plannedMarks: number | null;
 }
 
-export function resolvePaper(paper: Paper, db: DB) {
+/** A locked paper sees its frozen copies instead of the live question bank. */
+export function lockedView(paper: Paper, db: DB): DB {
+  if (!paper.locked) return db;
+  const templates = new Map(db.templates.map((t) => [t.id, t]));
+  for (const t of paper.locked.templates) templates.set(t.id, t);
+  return { ...db, questions: paper.locked.questions, templates: [...templates.values()] };
+}
+
+/** Freezes the paper's questions and the templates they use. */
+export function lockPaper(paper: Paper, db: DB): Paper {
+  const ids = new Set(paperQuestionIds(paper));
+  const questions = db.questions.filter((q) => ids.has(q.id));
+  const used = new Set<string>();
+  for (const q of questions) {
+    used.add(q.templateId);
+    for (const v of Object.values(q.data)) for (const p of asParts(v).items) used.add(p.templateId);
+  }
+  return { ...paper, locked: { at: Date.now(), questions: structuredClone(questions), templates: structuredClone(db.templates.filter((t) => used.has(t.id))) } };
+}
+
+/** Other papers that use a question (so editing it would change them too). */
+export const papersUsing = (db: DB, questionId: string, exceptPaperId?: string) =>
+  db.papers.filter((p) => p.id !== exceptPaperId && !p.locked && paperQuestionIds(p).includes(questionId));
+
+/** Points one paper at a different question id (used when making a private copy). */
+export function replaceInSection(s: Section, from: string, to: string): Section {
+  const alternatives: Record<string, string> = {};
+  for (const [k, v] of Object.entries(s.alternatives ?? {})) alternatives[k === from ? to : k] = v === from ? to : v;
+  return { ...s, questionIds: s.questionIds.map((x) => (x === from ? to : x)), alternatives };
+}
+
+export function resolvePaper(paper: Paper, liveDb: DB) {
+  const db = lockedView(paper, liveDb);
   const questions = new Map(db.questions.map((q) => [q.id, q]));
   const templates = new Map(db.templates.map((t) => [t.id, t]));
   let number = 0;
@@ -69,6 +101,7 @@ export interface DistRow { label: string; marks: number; count: number }
 
 /** Marks split by chapter, difficulty and question type — the blueprint check teachers do by hand. */
 export function marksDistribution(paper: Paper, db: DB) {
+  db = lockedView(paper, db);
   const { sections } = resolvePaper(paper, db);
   const group = (key: (q: ResolvedQuestion) => string) => {
     const rows = new Map<string, DistRow>();

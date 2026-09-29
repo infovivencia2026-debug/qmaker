@@ -2,6 +2,7 @@ import { useRef, type ClipboardEvent, type DragEvent } from 'react';
 import type { ImageAlign } from '../shared/types';
 import { useStore } from '../store';
 import { defaultWidthMm, joinRich, parseRich, type Seg } from '../lib/rich';
+import { imgSrc } from '../lib/images';
 
 interface Props {
   value: string;
@@ -88,7 +89,7 @@ export default function RichInput({ value, onChange, placeholder, single, classN
     const asset = db.images[s.id];
     return (
       <span key={i} className={`rimg al-${s.align}`} style={{ width: `${s.width}mm` }}>
-        {asset ? <img src={asset.src} /> : <span className="missing">image missing</span>}
+        {asset ? <img src={imgSrc(asset)} /> : <span className="missing">image missing</span>}
         <span className="rimg-bar" onMouseDown={(e) => e.preventDefault()}>
           {ALIGNS.map(([a, icon, title]) => (
             <button key={a} title={title} className={s.align === a ? 'on' : ''} onClick={() => setSeg(i, { align: a })}>{icon}</button>

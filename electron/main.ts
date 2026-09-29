@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from 'electron';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -21,6 +21,40 @@ function usePortableDataDir() {
   }
 }
 usePortableDataDir();
+
+// `QMaker.exe --smoke-test <dir>` renders a sample paper to <dir> and exits (0 = ok). Used by CI on Windows.
+const smokeArg = process.argv.indexOf('--smoke-test');
+const smokeOut = smokeArg >= 0 ? path.resolve(process.argv[smokeArg + 1] ?? 'smoke-out') : null;
+if (smokeOut && !fs.existsSync(path.join(path.dirname(process.execPath), 'portable.txt'))) {
+  app.setPath('userData', path.join(smokeOut, 'data'));
+}
+
+// Images are stored as files and shown through qimg://img/<file>, so the database stays small.
+protocol.registerSchemesAsPrivileged([{ scheme: 'qimg', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
+const imageDir = () => path.join(app.getPath('userData'), 'images');
+const IMAGE_TYPES: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg' };
+const safeImageName = (name: string) => /^[A-Za-z0-9-]+\.(png|jpe?g)$/.test(name) ? name : null;
+
+function registerImageProtocol() {
+  protocol.handle('qimg', async (req) => {
+    const name = safeImageName(decodeURIComponent(new URL(req.url).pathname.slice(1)));
+    if (!name) return new Response('bad name', { status: 400 });
+    try {
+      const data = await fsp.readFile(path.join(imageDir(), name));
+      return new Response(data, { headers: { 'content-type': IMAGE_TYPES[path.extname(name)], 'access-control-allow-origin': '*' } });
+    } catch {
+      return new Response('not found', { status: 404 });
+    }
+  });
+}
+
+ipcMain.handle('image:save', async (_e, name: string, bytes: Uint8Array) => {
+  if (!safeImageName(name)) throw new Error('Invalid image name');
+  await fsp.mkdir(imageDir(), { recursive: true });
+  const file = path.join(imageDir(), name);
+  // Ids are unique and images never change, so an existing file is already correct.
+  if (!fs.existsSync(file)) await fsp.writeFile(file, bytes);
+});
 const SHARE_EXTS = ['.qbank', '.qpaper'];
 
 let mainWindow: BrowserWindow | null = null;
@@ -171,15 +205,13 @@ ipcMain.handle('shell:showInFolder', (_e, p: string) => shell.showItemInFolder(p
 
 // ---------- PDF ----------
 
-ipcMain.handle('pdf:export', async (_e, html: string, defaultName: string) => {
-  const target = await askSavePath(defaultName, 'PDF', 'pdf');
-  if (!target) return null;
-  // Render in a hidden copy of the app so the bundled Hindi/Telugu fonts are available.
+// Render in a hidden copy of the app so the bundled Hindi/Telugu fonts are available.
+async function renderPdf(html: string) {
   const win = new BrowserWindow({ show: false, webPreferences: { preload: path.join(__dirname, 'preload.js') } });
   try {
     await loadRenderer(win, 'print');
     await win.webContents.executeJavaScript(`window.__qmakerPrint(${JSON.stringify(html)})`);
-    const pdf = await win.webContents.printToPDF({
+    return await win.webContents.printToPDF({
       pageSize: 'A4',
       printBackground: true,
       margins: { top: 0.5, bottom: 0.6, left: 0.6, right: 0.6 },
@@ -188,16 +220,54 @@ ipcMain.handle('pdf:export', async (_e, html: string, defaultName: string) => {
       footerTemplate:
         '<div style="width:100%;text-align:center;font-size:9px;color:#555"><span class="pageNumber"></span> / <span class="totalPages"></span></div>',
     });
-    await fsp.writeFile(target, pdf);
-    return target;
   } finally {
     win.destroy();
   }
+}
+
+ipcMain.handle('pdf:export', async (_e, html: string, defaultName: string) => {
+  const target = await askSavePath(defaultName, 'PDF', 'pdf');
+  if (!target) return null;
+  await fsp.writeFile(target, await renderPdf(html));
+  return target;
 });
+
+async function runSmokeTest(out: string) {
+  const result: Record<string, unknown> = { userData: app.getPath('userData'), execPath: process.execPath };
+  const timer = setTimeout(() => {
+    fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify({ ...result, ok: false, error: 'timed out' }, null, 2));
+    app.exit(1);
+  }, 120_000);
+  try {
+    await fsp.mkdir(out, { recursive: true });
+    const win = new BrowserWindow({ show: false, webPreferences: { preload: path.join(__dirname, 'preload.js') } });
+    await loadRenderer(win, 'smoke');
+    const r = await win.webContents.executeJavaScript('window.__qmakerSmoke()');
+    win.destroy();
+    await fsp.writeFile(path.join(out, 'smoke-paper.pdf'), await renderPdf(r.html));
+    await fsp.writeFile(path.join(out, 'smoke-answer-key.pdf'), await renderPdf(r.keyHtml));
+    await fsp.writeFile(path.join(out, 'smoke-answer-key.docx'), Buffer.from(r.docxBase64, 'base64'));
+    Object.assign(result, { ok: true, checks: r.checks });
+    await fsp.writeFile(path.join(out, 'result.json'), JSON.stringify(result, null, 2));
+    clearTimeout(timer);
+    app.exit(0);
+  } catch (err) {
+    await fsp.writeFile(path.join(out, 'result.json'), JSON.stringify({ ...result, ok: false, error: String((err as Error).stack ?? err) }, null, 2)).catch(() => {});
+    clearTimeout(timer);
+    app.exit(1);
+  }
+}
 
 // ---------- app lifecycle ----------
 
-if (!app.requestSingleInstanceLock()) {
+if (smokeOut) {
+  // Hidden windows open and close during the test; don't let the app quit in between.
+  app.on('window-all-closed', () => {});
+  app.whenReady().then(() => {
+    registerImageProtocol();
+    runSmokeTest(smokeOut);
+  });
+} else if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   // Double-clicking a .qbank from WhatsApp downloads while the app is open lands here.
@@ -208,6 +278,9 @@ if (!app.requestSingleInstanceLock()) {
     const file = findShareFile(argv);
     if (file) mainWindow.webContents.send('file:opened', await readShareFile(file));
   });
-  app.whenReady().then(createWindow);
+  app.whenReady().then(() => {
+    registerImageProtocol();
+    createWindow();
+  });
   app.on('window-all-closed', () => app.quit());
 }

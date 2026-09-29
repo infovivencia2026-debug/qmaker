@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { DB, ImageAsset } from './shared/types';
 import { DEFAULT_STYLE } from './lib/fonts';
 import { collectImageIds, imageFromBlob } from './lib/rich';
+import { storeImages } from './lib/images';
 import { BUILTIN_TEMPLATES } from './shared/templates';
 import { translate } from './i18n';
 
@@ -53,7 +54,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const dirty = useRef(false);
 
   useEffect(() => {
-    window.qmaker.loadDb().then((raw) => setDb(normalize(raw)), (e) => setError(String(e)));
+    window.qmaker
+      .loadDb()
+      .then(async (raw) => {
+        const db = normalize(raw);
+        // Data from older versions kept pictures inside the database; move them to files once.
+        if (Object.values(db.images).some((a) => !a.file)) {
+          db.images = await storeImages(db.images);
+          dirty.current = true;
+        }
+        setDb(db);
+      })
+      .catch((e) => setError(String(e)));
   }, []);
 
   useEffect(() => {
@@ -62,7 +74,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const timer = setTimeout(() => {
       dirty.current = false;
       window.qmaker.saveDb(serialize(db)).catch((e) => setError(`Could not save: ${e}`));
-    }, 300);
+    }, 600);
     return () => clearTimeout(timer);
   }, [db]);
 

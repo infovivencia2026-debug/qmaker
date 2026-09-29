@@ -3,7 +3,7 @@ import type { Difficulty, FieldDef, OptionsValue, PairsValue, Part, PartNumberin
 import { isGroupTemplate } from '../shared/templates';
 import { blankPart } from './editor/QuestionBlock';
 import { useStore } from '../store';
-import { asOptions, asParts, asText, fieldValue, partLabel, partsMarks } from '../lib/paper';
+import { asOptions, asParts, asText, fieldValue, papersUsing, partLabel, partsMarks } from '../lib/paper';
 import { letter, uid } from '../lib/util';
 import Modal from './Modal';
 import RichInput from './RichInput';
@@ -161,6 +161,12 @@ export default function QuestionForm({ initial, onClose }: { initial: Question; 
       <button className="ghost" onClick={onClose}>{t('cancel')}</button>
       <button className="primary" onClick={save}>{t('save')}</button>
     </>}>
+      {(() => {
+        const used = papersUsing(db, q.id);
+        return used.length > 0 && (
+          <div className="msg under">Used in {used.length} paper{used.length > 1 ? 's' : ''} ({used.slice(0, 3).map((p) => p.examName || t('untitled')).join(', ')}). Saving changes them too — use Duplicate in the bank for a separate version. Locked papers are not affected.</div>
+        );
+      })()}
       <div className="grid4">
         <label>{t('subject')}<input list="subjects" value={q.subject} onChange={(e) => setQ({ ...q, subject: e.target.value })} /></label>
         <label>{t('chapter')}<input list="chapters" value={q.chapter} onChange={(e) => setQ({ ...q, chapter: e.target.value })} /></label>

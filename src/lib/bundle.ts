@@ -1,5 +1,6 @@
 import type { Bundle, DB, Paper, Question, Template } from '../shared/types';
 import { collectImageIds } from './rich';
+import { embedImages, storeImages } from './images';
 import { paperQuestionIds } from './paper';
 
 function customTemplatesFor(db: DB, questions: Question[]) {
@@ -7,20 +8,25 @@ function customTemplatesFor(db: DB, questions: Question[]) {
   return db.templates.filter((t) => !t.builtin && used.has(t.id));
 }
 
-function bundle(db: DB, kind: Bundle['kind'], templates: Template[], questions: Question[], papers: Paper[]): Bundle {
+async function bundle(db: DB, kind: Bundle['kind'], templates: Template[], questions: Question[], papers: Paper[]): Promise<Bundle> {
   const ids = collectImageIds([questions, papers]);
-  const images = Object.fromEntries([...ids].filter((id) => db.images[id]).map((id) => [id, db.images[id]]));
+  const images = await embedImages(Object.fromEntries([...ids].filter((id) => db.images[id]).map((id) => [id, db.images[id]])));
   return { format: 'qmaker', kind, version: 1, exportedAt: Date.now(), templates, questions, papers, images };
 }
 
+/** Saves a received bundle's pictures as files before it is merged. */
+export async function storeBundleImages(b: Bundle): Promise<Bundle> {
+  return { ...b, images: await storeImages(b.images) };
+}
+
 /** Question bank, optionally one subject. Includes custom templates too so the receiver can open everything. */
-export function bankBundle(db: DB, subject: string | null) {
+export async function bankBundle(db: DB, subject: string | null) {
   const questions = subject === null ? db.questions : db.questions.filter((q) => q.subject === subject);
   const templates = subject === null ? db.templates.filter((t) => !t.builtin) : customTemplatesFor(db, questions);
   return bundle(db, 'bank', templates, questions, []);
 }
 
-export function paperBundle(db: DB, paper: Paper) {
+export async function paperBundle(db: DB, paper: Paper) {
   const ids = new Set(paperQuestionIds(paper));
   const questions = db.questions.filter((q) => ids.has(q.id));
   return bundle(db, 'paper', customTemplatesFor(db, questions), questions, [paper]);

@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { Paper, Question, Section, Template } from '../shared/types';
 import { useStore } from '../store';
-import { paperQuestionIds, partsMarks, removeFromSection, resolvePaper, sectionInstruction } from '../lib/paper';
+import { lockPaper, paperQuestionIds, papersUsing, partsMarks, removeFromSection, replaceInSection, resolvePaper, sectionInstruction } from '../lib/paper';
 import { PAPER_CSS, renderPaperHtml } from '../lib/renderHtml';
 import { renderPaperDocx } from '../lib/renderDocx';
 import { paperBundle } from '../lib/bundle';
@@ -111,6 +111,37 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
     select({ kind: 'paper' });
   };
 
+  // A question used by other papers can be split off so edits here stay in this paper.
+  const makePrivateCopy = (sectionId: string, qid: string) => {
+    const src = db.questions.find((q) => q.id === qid);
+    if (!src) return;
+    const copy = { ...structuredClone(src), id: uid(), createdAt: Date.now(), updatedAt: Date.now() };
+    update((db) => ({
+      ...db,
+      questions: [...db.questions, copy],
+      papers: db.papers.map((p) => (p.id !== id ? p : touch({ ...p, sections: p.sections.map((s) => (s.id === sectionId ? replaceInSection(s, qid, copy.id) : s)) }))),
+    }));
+    select({ kind: 'question', sectionId, id: copy.id });
+    notify('This paper now has its own copy. Other papers are unchanged.');
+  };
+
+  const toggleLock = () => {
+    if (!paper.locked) {
+      setPaper(lockPaper(paper, db));
+      notify('Paper locked. It will print exactly like this even if questions change in the bank.');
+      select({ kind: 'paper' });
+      return;
+    }
+    const frozen = new Map(paper.locked.questions.map((q) => [q.id, q.updatedAt]));
+    const changed = db.questions.filter((q) => frozen.has(q.id) && q.updatedAt !== frozen.get(q.id)).length;
+    const missing = [...frozen.keys()].filter((qid) => !db.questions.some((q) => q.id === qid)).length;
+    const note = changed || missing
+      ? `\n\n${changed ? `${changed} question(s) were edited in the bank since you locked it — the paper will show the new versions.` : ''}${missing ? `\n${missing} question(s) were deleted from the bank and will disappear from the paper.` : ''}`
+      : '';
+    if (!confirm(`Unlock this paper for editing?${note}`)) return;
+    setPaper({ locked: undefined });
+  };
+
   // ---------- either / or ----------
   const setAlternative = (sectionId: string, primaryId: string, altId: string | null, newQ?: Question) => {
     update((db) => ({
@@ -191,7 +222,7 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
     [`🔑 ${t('answerKeyPdf')}`, () => run(() => window.qmaker.exportPdf(renderPaperHtml(paper, db, true), `${baseName} - Answer Key.pdf`))],
     [`📝 ${t('exportWord')} (.docx)`, () => run(async () => window.qmaker.saveFile(await renderPaperDocx(paper, db, false), `${baseName}.docx`, 'Word', 'docx'))],
     [`🔑 ${t('exportWordKey')}`, () => run(async () => window.qmaker.saveFile(await renderPaperDocx(paper, db, true), `${baseName} - Answer Key.docx`, 'Word', 'docx'))],
-    [`💬 ${t('sharePaper')} (WhatsApp)`, () => run(() => window.qmaker.saveFile(new TextEncoder().encode(JSON.stringify(paperBundle(db, paper))), `${baseName}.qpaper`, 'QMaker Paper', 'qpaper'))],
+    [`💬 ${t('sharePaper')} (WhatsApp)`, () => run(async () => window.qmaker.saveFile(new TextEncoder().encode(JSON.stringify(await paperBundle(db, paper))), `${baseName}.qpaper`, 'QMaker Paper', 'qpaper'))],
   ];
 
   // ---------- sidebar ----------
@@ -217,10 +248,13 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
     );
   } else if (sel.kind === 'question' && selRq && selSection) {
     const primaryId = selRq.question.id;
+    const selId = selIsAlt ? selRq.alt!.question.id : primaryId;
     blockPanel = (
       <QuestionPanel
         rq={selRq}
         isAlt={selIsAlt}
+        sharedWith={papersUsing(db, selId, paper.id)}
+        onMakeCopy={() => makePrivateCopy(selSection.id, selId)}
         section={selSection}
         onChange={(p) => setQuestion(selIsAlt ? selRq.alt!.question.id : primaryId, p)}
         onDuplicate={() => duplicate(selSection.id, primaryId)}
@@ -249,6 +283,9 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
             {resolved.totalMarks}{target > 0 && ` / ${target}`} marks
           </button>
           <span className="saved">✓ {t('saved')}</span>
+          <button className={paper.locked ? 'locked-btn' : ''} onClick={toggleLock} title={paper.locked ? 'Unlock to edit' : 'Freeze this paper as final'}>
+            {paper.locked ? '🔒 Locked' : '🔓 Lock'}
+          </button>
           <button onClick={() => setPreview('paper')}>{t('preview')}</button>
           <div className="dd">
             <button className="primary" disabled={busy} onClick={() => setExportOpen((o) => !o)}>{busy ? '…' : 'Export ▾'}</button>
@@ -265,6 +302,15 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
       <div className="wp-body">
         <div className="wp-canvas" onMouseDown={() => select({ kind: 'paper' })}>
           <style>{PAPER_CSS}</style>
+          {paper.locked && (
+            <div className="locked-banner">
+              🔒 Locked on {new Date(paper.locked.at).toLocaleString()} — this is the final version. It won't change even if its questions are edited in the bank.
+              <button onClick={toggleLock}>Unlock to edit</button>
+            </div>
+          )}
+          {paper.locked ? (
+            <div className="sheet" dangerouslySetInnerHTML={{ __html: renderPaperHtml(paper, db, false) }} />
+          ) : (
           <div className="sheet qp edit" style={sheetStyle}>
             <div className="hd">
               <div className="hd-top">
@@ -316,6 +362,7 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
                       <div className="between"><button onMouseDown={(e) => e.stopPropagation()} onClick={() => setInserter({ sectionId: rs.id, index: i })}>+</button></div>
                       <QuestionBlock
                         rq={rq}
+                        sharedCount={papersUsing(db, rq.question.id, paper.id).length}
                         answerSpace={paper.answerSpace}
                         selected={sel.kind === 'question' && sel.id === rq.question.id}
                         onSelect={() => select({ kind: 'question', sectionId: rs.id, id: rq.question.id })}
@@ -350,6 +397,7 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
             <button className="appender sec-app" onMouseDown={(e) => e.stopPropagation()} onClick={addSection}><span>+</span> Add section</button>
             <div className="end">*** End of Paper ***</div>
           </div>
+          )}
         </div>
 
         {sidebar && (

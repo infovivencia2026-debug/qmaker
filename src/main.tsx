@@ -39,6 +39,8 @@ if (location.hash === '#print') {
     await document.fonts.ready;
     return true;
   };
+} else if (location.hash === '#smoke') {
+  (window as unknown as { __qmakerSmoke: () => Promise<unknown> }).__qmakerSmoke = () => import('./smoke').then((m) => m.run());
 } else {
   createRoot(document.getElementById('root')!).render(
     <StoreProvider>

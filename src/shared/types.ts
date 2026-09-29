@@ -86,6 +86,8 @@ export interface Paper {
   answerSpace: boolean;
   /** Per-paper overrides of the institution's paper style. */
   style?: Partial<PaperStyle>;
+  /** A locked (final) paper prints from these copies, so later edits in the bank never change it. */
+  locked?: { at: number; questions: Question[]; templates: Template[] };
   /** Target maximum marks for the blueprint (0 = no target). */
   maxMarks?: number;
   sections: Section[];
@@ -110,8 +112,10 @@ export type ImageAlign = 'inline' | 'left' | 'center' | 'right';
 /** Images live once in the DB and are referenced from any text by an [[img:id|widthMm|align]] token. */
 export interface ImageAsset {
   id: string;
-  /** data: URL (PNG or JPEG) */
-  src: string;
+  /** File name in the app's images folder (e.g. "<id>.png"). */
+  file?: string;
+  /** data: URL — only inside share/backup files and data from older versions. */
+  src?: string;
   /** natural pixel size, for aspect ratio */
   w: number;
   h: number;

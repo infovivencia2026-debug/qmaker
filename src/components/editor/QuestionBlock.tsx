@@ -176,10 +176,12 @@ interface Props {
   onMove?: (d: number) => void;
   onDuplicate?: () => void;
   onRemove: () => void;
+  /** Number of other papers that also use this question. */
+  sharedCount?: number;
 }
 
 /** A question edited in place on the page, styled like the printed paper. */
-export default function QuestionBlock({ rq, which = 'main', selected, answerSpace, onSelect, onData, onMove, onDuplicate, onRemove }: Props) {
+export default function QuestionBlock({ rq, which = 'main', selected, answerSpace, onSelect, onData, onMove, onDuplicate, onRemove, sharedCount = 0 }: Props) {
   const isAlt = which === 'alt';
   const q = isAlt ? rq.alt!.question : rq.question;
   const template = isAlt ? rq.alt!.template : rq.template;
@@ -189,6 +191,7 @@ export default function QuestionBlock({ rq, which = 'main', selected, answerSpac
       {selected && (
         <div className="blk-bar" onMouseDown={(e) => e.stopPropagation()}>
           <span className="blk-type">{isAlt ? `OR · ${template.name}` : template.name}</span>
+          {sharedCount > 0 && <span className="blk-shared" title="Editing this question also changes those papers. See the sidebar to make a separate copy.">⚠ also in {sharedCount} other paper{sharedCount > 1 ? 's' : ''}</span>}
           {onMove && <button title="Move up" onClick={() => onMove(-1)}>↑</button>}
           {onMove && <button title="Move down" onClick={() => onMove(1)}>↓</button>}
           {onDuplicate && <button title="Duplicate" onClick={onDuplicate}>⧉</button>}

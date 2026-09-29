@@ -279,3 +279,7 @@ table.list.compact td { padding: 6px 10px; }
 .or-div { display: flex; align-items: center; gap: 10px; margin: 2px 0; font-weight: 700; }
 .or-div::before, .or-div::after { content: ''; flex: 1; border-top: 1px dashed #c3c4c7; }
 .part-card { border: 1px solid var(--line); padding: 8px 10px; background: #fafafa; }
+.locked-banner { max-width: 210mm; margin: 0 auto 12px; background: #fcf9e8; border-left: 4px solid var(--warn); padding: 10px 14px; display: flex; gap: 12px; align-items: center; justify-content: space-between; font-size: 13px; }
+button.locked-btn { background: #fcf9e8; border-color: var(--warn); color: #614a00; }
+.blk-shared { padding: 6px 10px; background: #fcf9e8; color: #614a00; border-right: 1px solid var(--line); white-space: nowrap; }
+.shared-panel { background: #fffdf5; }

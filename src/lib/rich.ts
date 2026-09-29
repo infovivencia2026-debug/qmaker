@@ -1,5 +1,6 @@
 import type { ImageAlign, ImageAsset } from '../shared/types';
 import { esc, uid } from './util';
+import { imgSrc, storeImage } from './images';
 
 /**
  * Any text in QMaker (question, option, match cell, answer, instruction) can hold images as
@@ -61,7 +62,7 @@ export function richHtml(s: string, images: Record<string, ImageAsset>) {
       if (seg.kind === 'text') return esc(seg.text);
       const img = images[seg.id];
       if (!img) return '';
-      return `<img class="qi al-${seg.align}" style="width:${seg.width}mm" src="${img.src}" />`;
+      return `<img class="qi al-${seg.align}" style="width:${seg.width}mm" src="${esc(imgSrc(img))}" />`;
     })
     .join('');
 }
@@ -105,7 +106,7 @@ export async function imageFromBlob(blob: Blob): Promise<ImageAsset> {
   ctx.drawImage(img, 0, 0, w, h);
   let src = canvas.toDataURL('image/png');
   if (src.length > 500_000) src = canvas.toDataURL('image/jpeg', 0.88);
-  return { id: uid(), src, w, h };
+  return storeImage({ id: uid(), src, w, h });
 }
 
 /** Default print width: fits small icons small and caps big pictures at a sensible size. */

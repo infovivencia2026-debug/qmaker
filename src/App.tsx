@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useStore } from './store';
-import { mergeBundle, parseBundle } from './lib/bundle';
+import { mergeBundle, parseBundle, storeBundleImages } from './lib/bundle';
 import Papers from './pages/Papers';
 import Bank from './pages/Bank';
 import Templates from './pages/Templates';
@@ -15,9 +15,9 @@ export default function App() {
 
   // A .qbank/.qpaper opened from Explorer (e.g. a WhatsApp download) is imported straight away.
   useEffect(() => {
-    const importFile = (f: SharedFile) => {
+    const importFile = async (f: SharedFile) => {
       try {
-        const bundle = parseBundle(f.text);
+        const bundle = await storeBundleImages(parseBundle(f.text));
         update((db) => mergeBundle(db, bundle).db);
         notify(`Imported ${f.name}: ${bundle.questions.length} questions, ${bundle.papers.length} papers`);
         setPage(bundle.kind === 'paper' ? 'papers' : 'bank');

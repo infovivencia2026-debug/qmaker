@@ -12,7 +12,8 @@
     "build": "tsc -p tsconfig.electron.json && tsc --noEmit && vite build",
     "dist:win": "npm run build && electron-builder --win --x64",
     "dist:portable": "npm run build && electron-builder --win --x64 --dir && node scripts/make-portable.cjs",
-    "dist:share": "npm run build && electron-builder --win --x64 && node scripts/make-share.cjs"
+    "dist:share": "npm run build && electron-builder --win --x64 && node scripts/make-share.cjs",
+    "test": "vitest run"
   },
   "build": {
     "appId": "com.qmaker.app",
@@ -79,6 +80,7 @@
     "electron-builder": "^26.15.3",
     "typescript": "^7.0.2",
     "vite": "^8.3.1",
+    "vitest": "^5.0.2",
     "wait-on": "^9.4.0"
   }
 }

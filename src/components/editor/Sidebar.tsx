@@ -154,8 +154,8 @@ function SectionPanel({ paper, section, setSection, onAutoFill, onMove, onDelete
   );
 }
 
-function QuestionPanel({ rq, isAlt, section, onChange, onDuplicate, onRemove, onAddAltNew, onAddAltBank, onRemoveAlt, onSwapAlt }: {
-  rq: ResolvedQuestion; isAlt: boolean; section: Section; onChange: (q: Partial<Question>) => void; onDuplicate: () => void; onRemove: () => void;
+function QuestionPanel({ rq, isAlt, sharedWith, onMakeCopy, section, onChange, onDuplicate, onRemove, onAddAltNew, onAddAltBank, onRemoveAlt, onSwapAlt }: {
+  rq: ResolvedQuestion; isAlt: boolean; sharedWith: Paper[]; onMakeCopy: () => void; section: Section; onChange: (q: Partial<Question>) => void; onDuplicate: () => void; onRemove: () => void;
   onAddAltNew: () => void; onAddAltBank: () => void; onRemoveAlt: () => void; onSwapAlt: () => void;
 }) {
   const { db, t } = useStore();
@@ -167,6 +167,16 @@ function QuestionPanel({ rq, isAlt, section, onChange, onDuplicate, onRemove, on
   const altMarksDiffer = rq.alt && !section.marksEach && rq.alt.question.marks !== rq.question.marks;
   return (
     <>
+      {sharedWith.length > 0 && (
+        <div className="panel shared-panel">
+          <div className="msg under">
+            <b>Also used in {sharedWith.length} other paper{sharedWith.length > 1 ? 's' : ''}:</b>{' '}
+            {sharedWith.slice(0, 3).map((p) => p.examName || t('untitled')).join(', ')}{sharedWith.length > 3 && '…'}.
+            <br />Editing it here changes those papers too.
+          </div>
+          <button className="primary block" onClick={onMakeCopy}>Make a separate copy for this paper</button>
+        </div>
+      )}
       <div className="panel">
         <div className="panel-h">{template.name} · Q{rq.number}{isAlt && ' (OR)'}</div>
         {section.marksEach ? (
