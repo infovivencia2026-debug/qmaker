@@ -12,6 +12,7 @@ import QuestionPicker from '../components/QuestionPicker';
 import Modal from '../components/Modal';
 import RichInput from '../components/RichInput';
 import { effectiveStyle, fontStack } from '../lib/fonts';
+import { paperLabels } from '../lib/labels';
 import QuestionBlock from '../components/editor/QuestionBlock';
 import Inserter from '../components/editor/Inserter';
 import { PaperPanel, QuestionPanel, SectionPanel, type Sel } from '../components/editor/Sidebar';
@@ -41,6 +42,7 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
 
   const resolved = resolvePaper(paper, db);
   const style = effectiveStyle(db.settings.paperStyle, paper.style);
+  const L = paperLabels(paper.labelLang);
   const sheetStyle = {
     fontFamily: fontStack(style), '--fs': `${style.fontSize}pt`, '--lh': style.lineHeight, '--gap': `${style.questionGap}pt`,
   } as React.CSSProperties;
@@ -280,15 +282,15 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
         </div>
         <div className="wp-top-r">
           <button className={`marks-pill ${marksStatus}`} onClick={() => { select({ kind: 'paper' }); setSidebar(true); }} title="Marks distribution">
-            {resolved.totalMarks}{target > 0 && ` / ${target}`} marks
+            {resolved.totalMarks}{target > 0 && ` / ${target}`} {t('marksWord')}
           </button>
           <span className="saved">✓ {t('saved')}</span>
           <button className={paper.locked ? 'locked-btn' : ''} onClick={toggleLock} title={paper.locked ? 'Unlock to edit' : 'Freeze this paper as final'}>
-            {paper.locked ? '🔒 Locked' : '🔓 Lock'}
+            {paper.locked ? `🔒 ${t('locked')}` : `🔓 ${t('lock')}`}
           </button>
           <button onClick={() => setPreview('paper')}>{t('preview')}</button>
           <div className="dd">
-            <button className="primary" disabled={busy} onClick={() => setExportOpen((o) => !o)}>{busy ? '…' : 'Export ▾'}</button>
+            <button className="primary" disabled={busy} onClick={() => setExportOpen((o) => !o)}>{busy ? '…' : `${t('export')} ▾`}</button>
             {exportOpen && (
               <div className="dd-menu" onMouseLeave={() => setExportOpen(false)}>
                 {exports.map(([label, fn]) => <button key={label} onClick={fn}>{label}</button>)}
@@ -305,7 +307,7 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
           {paper.locked && (
             <div className="locked-banner">
               🔒 Locked on {new Date(paper.locked.at).toLocaleString()} — this is the final version. It won't change even if its questions are edited in the bank.
-              <button onClick={toggleLock}>Unlock to edit</button>
+              <button onClick={toggleLock}>{t('unlockToEdit')}</button>
             </div>
           )}
           {paper.locked ? (
@@ -323,17 +325,17 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
               <input className="ib exam" value={paper.examName} placeholder="Exam name, e.g. Half Yearly Examination 2026-27" onChange={(e) => setPaper({ examName: e.target.value })} />
             </div>
             <div className="meta">
-              <span>Class: <input className="ib inl" value={paper.className} placeholder="VIII" onChange={(e) => setPaper({ className: e.target.value })} /></span>
-              <span>Subject: <input className="ib inl" list="ed-subjects" value={paper.subject} placeholder="Science" onChange={(e) => setPaper({ subject: e.target.value })} /></span>
+              <span>{L('class')}: <input className="ib inl" value={paper.className} placeholder="VIII" onChange={(e) => setPaper({ className: e.target.value })} /></span>
+              <span>{L('subject')}: <input className="ib inl" list="ed-subjects" value={paper.subject} placeholder="Science" onChange={(e) => setPaper({ subject: e.target.value })} /></span>
             </div>
             <datalist id="ed-subjects">{[...new Set(db.questions.map((q) => q.subject))].map((s) => <option key={s} value={s} />)}</datalist>
             <div className="meta">
-              <span>Time: <input className="ib inl" value={paper.duration} onChange={(e) => setPaper({ duration: e.target.value })} /></span>
-              <span>Date: <input className="ib inl" value={paper.date} placeholder="dd-mm-yyyy" onChange={(e) => setPaper({ date: e.target.value })} /></span>
-              <span>Max. Marks: {resolved.totalMarks}</span>
+              <span>{L('time')}: <input className="ib inl" value={paper.duration} onChange={(e) => setPaper({ duration: e.target.value })} /></span>
+              <span>{L('date')}: <input className="ib inl" value={paper.date} placeholder="dd-mm-yyyy" onChange={(e) => setPaper({ date: e.target.value })} /></span>
+              <span>{L('maxMarks')}: {resolved.totalMarks}</span>
             </div>
             <div className="gi">
-              <div className="gi-title">General Instructions:</div>
+              <div className="gi-title">{L('instructions')}:</div>
               <RichInput value={paper.instructions} placeholder="Instructions (optional)" onChange={(v) => setPaper({ instructions: v })} />
             </div>
 
@@ -364,6 +366,7 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
                         rq={rq}
                         sharedCount={papersUsing(db, rq.question.id, paper.id).length}
                         answerSpace={paper.answerSpace}
+                        bilingual={!!paper.bilingual}
                         selected={sel.kind === 'question' && sel.id === rq.question.id}
                         onSelect={() => select({ kind: 'question', sectionId: rs.id, id: rq.question.id })}
                         onData={(data) => setQuestion(rq.question.id, { data })}
@@ -373,11 +376,12 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
                       />
                       {rq.alt && (
                         <>
-                          <div className="or-div"><span>OR</span></div>
+                          <div className="or-div"><span>{L('or')}</span></div>
                           <QuestionBlock
                             rq={rq}
                             which="alt"
                             answerSpace={paper.answerSpace}
+                            bilingual={!!paper.bilingual}
                             selected={sel.kind === 'question' && sel.id === rq.alt.question.id}
                             onSelect={() => select({ kind: 'question', sectionId: rs.id, id: rq.alt!.question.id })}
                             onData={(data) => setQuestion(rq.alt!.question.id, { data })}
@@ -388,14 +392,14 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
                     </Fragment>
                   ))}
                   <button className="appender" onMouseDown={(e) => e.stopPropagation()} onClick={() => setInserter({ sectionId: rs.id, index: section.questionIds.length })}>
-                    <span>+</span> Add question to {section.title || 'this section'}
-                    {planned && rs.questions.length < rs.plannedCount && <em> — {rs.plannedCount - rs.questions.length} more planned</em>}
+                    <span>+</span> {t('addQuestion')} · {section.title || t('section')}
+                    {planned && rs.questions.length < rs.plannedCount && <em> — {rs.plannedCount - rs.questions.length} {t('morePlanned')}</em>}
                   </button>
                 </div>
               );
             })}
-            <button className="appender sec-app" onMouseDown={(e) => e.stopPropagation()} onClick={addSection}><span>+</span> Add section</button>
-            <div className="end">*** End of Paper ***</div>
+            <button className="appender sec-app" onMouseDown={(e) => e.stopPropagation()} onClick={addSection}><span>+</span> {t('addSection')}</button>
+            <div className="end">{L('end')}</div>
           </div>
           )}
         </div>
@@ -403,8 +407,8 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
         {sidebar && (
           <aside className="wp-side">
             <div className="wp-tabs">
-              <button className={tab === 'paper' ? 'on' : ''} onClick={() => setTab('paper')}>Paper</button>
-              <button className={tab === 'block' ? 'on' : ''} onClick={() => setTab('block')}>{sel.kind === 'section' ? 'Section' : sel.kind === 'question' ? 'Question' : 'Block'}</button>
+              <button className={tab === 'paper' ? 'on' : ''} onClick={() => setTab('paper')}>{t('paper')}</button>
+              <button className={tab === 'block' ? 'on' : ''} onClick={() => setTab('block')}>{sel.kind === 'section' ? t('section') : sel.kind === 'question' ? t('question') : '—'}</button>
             </div>
             <div className="wp-side-b">
               {tab === 'paper' ? <PaperPanel paper={paper} setPaper={setPaper} onSelectSection={(sid) => select({ kind: 'section', id: sid })} /> : blockPanel}

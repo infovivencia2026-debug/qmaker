@@ -52,7 +52,7 @@ export default function App() {
           <button key={p} className={page === p ? 'on' : ''} onClick={() => setPage(p)}>{label}</button>
         ))}
         <div className="side-undo">
-          <button disabled={!canUndo} title="Undo (Ctrl+Z)" onClick={undo}>↶ Undo</button>
+          <button disabled={!canUndo} title="Undo (Ctrl+Z)" onClick={undo}>↶ {t('undo')}</button>
           <button disabled={!canRedo} title="Redo (Ctrl+Y)" onClick={redo}>↷</button>
         </div>
       </nav>

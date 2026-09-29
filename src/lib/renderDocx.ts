@@ -5,10 +5,12 @@ import {
 } from 'docx';
 import type { DB, ImageAlign, ImageAsset, Paper, Question, Template } from '../shared/types';
 import { letter, seededOrder } from './util';
-import { asOptions, asPairs, asParts, asText, fieldValue, lockedView, optionColumns, paperQuestionIds, partLabel, resolvePaper, sectionInstruction, type ResolvedQuestion } from './paper';
+import { asOptions, asPairs, asParts, asText, fieldValue, lockedView, optionColumns, paperQuestionIds, partLabel, resolvePaper, secondKey, sectionInstruction, type ResolvedQuestion } from './paper';
 import { collectImageIds, hasImage, parseRich } from './rich';
 import { imageBytes, imgType } from './images';
 import { effectiveStyle, wordLatinFont } from './fonts';
+import { paperLabels, type LabelKey } from './labels';
+import { answerLabel } from './renderHtml';
 
 const CONTENT_WIDTH = 9906; // A4 width (11906 twips) minus 1000 twip margins
 const INDENT = 560;
@@ -25,12 +27,16 @@ class DocxWriter {
   readonly gap: number; // twips before each question
   private font: { ascii: string; hAnsi: string; eastAsia: string; cs: string };
   readonly templates: Map<string, Template>;
+  readonly L: (k: LabelKey) => string;
+  readonly bilingual: boolean;
 
   constructor(private db: DB, paper: Paper, private imageData: Map<string, Uint8Array>) {
     const style = effectiveStyle(db.settings.paperStyle, paper.style);
     this.size = Math.round(style.fontSize * 2);
     this.gap = Math.round(style.questionGap * 20);
     this.templates = new Map(db.templates.map((t) => [t.id, t]));
+    this.L = paperLabels(paper.labelLang);
+    this.bilingual = !!paper.bilingual;
     const latin = wordLatinFont(style);
     // Word renders Devanagari/Telugu with the complex-script (cs) font. Nirmala UI ships with every Windows since 8.
     this.font = { ascii: latin, hAnsi: latin, eastAsia: latin, cs: 'Nirmala UI' };
@@ -165,20 +171,27 @@ function fieldBlocks(w: DocxWriter, q: QLike, template: Template, label: string,
     switch (f.type) {
       case 'text': {
         const text = asText(v);
-        if (!text) break;
-        if (f.answer) addRich(text, { italics: true }, [w.run(`${f.label}: `, { bold: true })]);
-        else addRich(text);
+        const text2 = w.bilingual ? asText(q.data[secondKey(f.key)]) : '';
+        if (!text && !text2) break;
+        if (f.answer) addRich(text2 ? `${text}\n${text2}` : text, { italics: true }, [w.run(`${answerLabel(template, f.label, w.L)}: `, { bold: true })]);
+        else {
+          addRich(text);
+          if (text2) out.push(...w.block(text2, {}, left));
+        }
         break;
       }
       case 'truefalse':
-        if (typeof v === 'boolean') addRich(v ? 'True' : 'False', { italics: true }, [w.run(`${f.label}: `, { bold: true })]);
+        if (typeof v === 'boolean') addRich(w.L(v ? 'true' : 'false'), { italics: true }, [w.run(`${answerLabel(template, f.label, w.L)}: `, { bold: true })]);
         break;
       case 'options': {
-        const { items, correct } = asOptions(v);
-        const cols = optionColumns(items);
+        const { items, items2, correct } = asOptions(v);
+        const twoLang = w.bilingual && !!items2?.some(Boolean);
+        // Bilingual options need two lines each, so they go one per row.
+        const cols = twoLang ? 1 : optionColumns(items);
         const cell = (i: number) => {
           const on = answerKey && i === correct;
-          return [w.run(`(${letter(i)}) `, { bold: on }), ...w.flat(items[i], { bold: on, underline: on ? {} : undefined })];
+          const second = twoLang && items2?.[i] ? [w.run('', { break: 1 }), w.run('\t'), ...w.flat(items2[i])] : [];
+          return [w.run(`(${letter(i)}) `, { bold: on }), ...w.flat(items[i], { bold: on, underline: on ? {} : undefined }), ...second];
         };
         ensureNumbered();
         const colWidth = Math.floor((CONTENT_WIDTH - left) / cols);
@@ -191,7 +204,7 @@ function fieldBlocks(w: DocxWriter, q: QLike, template: Template, label: string,
             tabStops: Array.from({ length: cols - 1 }, (_, j) => ({ type: TabStopType.LEFT, position: left + colWidth * (j + 1) })),
           }));
         }
-        if (answerKey && correct !== null) addRich(hasImage(items[correct]) ? '' : items[correct], { italics: true }, [w.run(`Answer: (${letter(correct)}) `, { bold: true })]);
+        if (answerKey && correct !== null) addRich(hasImage(items[correct]) ? '' : items[correct], { italics: true }, [w.run(`${w.L('answer')}: (${letter(correct)}) `, { bold: true })]);
         break;
       }
       case 'pairs': {
@@ -212,7 +225,7 @@ function fieldBlocks(w: DocxWriter, q: QLike, template: Template, label: string,
             ...pairs.map((p, i) => new TableRow({ children: [cell(`${i + 1}. `, p[0]), cell(`(${letter(i)}) `, pairs[order[i]][1])] })),
           ],
         }));
-        if (answerKey) addRich(pairs.map((_, i) => `${i + 1} → (${letter(order.indexOf(i))})`).join(',  '), { italics: true }, [w.run('Answer: ', { bold: true })]);
+        if (answerKey) addRich(pairs.map((_, i) => `${i + 1} → (${letter(order.indexOf(i))})`).join(',  '), { italics: true }, [w.run(`${w.L('answer')}: `, { bold: true })]);
         break;
       }
       case 'lines': {
@@ -242,7 +255,7 @@ function fieldBlocks(w: DocxWriter, q: QLike, template: Template, label: string,
 function questionBlocks(w: DocxWriter, { number, question, template, marks, alt }: ResolvedQuestion, answerKey: boolean, answerSpace: boolean) {
   const out = fieldBlocks(w, question, template, `${number}.`, `[${marks}]`, INDENT, answerKey, answerSpace);
   if (alt) {
-    out.push(w.para([w.run('OR', { bold: true })], { alignment: AlignmentType.CENTER, spacing: { before: 60, after: 60 } }));
+    out.push(w.para([w.run(w.L('or'), { bold: true })], { alignment: AlignmentType.CENTER, spacing: { before: 60, after: 60 } }));
     out.push(...fieldBlocks(w, alt.question, alt.template, '', '', INDENT, answerKey, answerSpace));
   }
   return out;
@@ -272,15 +285,15 @@ export async function renderPaperDocx(paper: Paper, liveDb: DB, answerKey: boole
   if (s.institutionName) children.push(center([w.run(s.institutionName, { bold: true, ...w.scaled(1.33) })]));
   if (s.address) children.push(center([w.run(s.address, w.scaled(0.83))]));
   children.push(
-    w.para([w.run(paper.examName + (answerKey ? ' — ANSWER KEY' : ''), { bold: true, ...w.scaled(1.08) })], {
+    w.para([w.run(paper.examName + (answerKey ? ` — ${w.L('answerKey')}` : ''), { bold: true, ...w.scaled(1.08) })], {
       alignment: AlignmentType.CENTER,
       border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: '000000', space: 4 } },
     }),
-    spread(`Class: ${paper.className}`, `Subject: ${paper.subject}`),
-    spread(`Time: ${paper.duration}${paper.date ? `    Date: ${paper.date}` : ''}`, `Max. Marks: ${totalMarks}`),
+    spread(`${w.L('class')}: ${paper.className}`, `${w.L('subject')}: ${paper.subject}`),
+    spread(`${w.L('time')}: ${paper.duration}${paper.date ? `    ${w.L('date')}: ${paper.date}` : ''}`, `${w.L('maxMarks')}: ${totalMarks}`),
   );
   if (paper.instructions.trim()) {
-    children.push(w.para([w.run('General Instructions:', { bold: true })], { spacing: { before: 160, after: 40 } }));
+    children.push(w.para([w.run(`${w.L('instructions')}:`, { bold: true })], { spacing: { before: 160, after: 40 } }));
     children.push(...plain(paper.instructions.trim(), w.scaled(0.92)));
   }
   for (const sec of sections) {
@@ -297,7 +310,7 @@ export async function renderPaperDocx(paper: Paper, liveDb: DB, answerKey: boole
     if (instr) children.push(...plain(instr, { italics: true, ...w.scaled(0.92) }));
     for (const q of sec.questions) children.push(...questionBlocks(w, q, answerKey, paper.answerSpace));
   }
-  children.push(center([w.run('*** End of Paper ***', { bold: true })]));
+  children.push(center([w.run(w.L('end'), { bold: true })]));
 
   const style = effectiveStyle(s.paperStyle, paper.style);
   const doc = new Document({

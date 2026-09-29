@@ -23,6 +23,8 @@ export interface Template {
 
 export interface OptionsValue {
   items: string[];
+  /** Second-language version of each option (bilingual papers). */
+  items2?: string[];
   correct: number | null;
 }
 
@@ -86,6 +88,10 @@ export interface Paper {
   answerSpace: boolean;
   /** Per-paper overrides of the institution's paper style. */
   style?: Partial<PaperStyle>;
+  /** Language of printed words like "Class", "Max. Marks", "OR". */
+  labelLang?: import('../lib/labels').PaperLang;
+  /** Print each question's second-language version under it. */
+  bilingual?: boolean;
   /** A locked (final) paper prints from these copies, so later edits in the bank never change it. */
   locked?: { at: number; questions: Question[]; templates: Template[] };
   /** Target maximum marks for the blueprint (0 = no target). */

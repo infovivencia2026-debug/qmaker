@@ -3,7 +3,7 @@ import type { Difficulty, FieldDef, OptionsValue, PairsValue, Part, PartNumberin
 import { isGroupTemplate } from '../shared/templates';
 import { blankPart } from './editor/QuestionBlock';
 import { useStore } from '../store';
-import { asOptions, asParts, asText, fieldValue, papersUsing, partLabel, partsMarks } from '../lib/paper';
+import { asOptions, asParts, asText, fieldValue, papersUsing, partLabel, partsMarks, secondKey } from '../lib/paper';
 import { letter, uid } from '../lib/util';
 import Modal from './Modal';
 import RichInput from './RichInput';
@@ -31,7 +31,33 @@ function validate(q: Question, template: Template): string | null {
   return null;
 }
 
-function PartsInput({ value, onChange }: { value: unknown; onChange: (v: unknown) => void }) {
+/** Fields of a question or part, with an optional second-language box under each text field. */
+function FieldList({ fields, data, onData, bilingual, required }: {
+  fields: FieldDef[]; data: Record<string, unknown>; onData: (d: Record<string, unknown>) => void; bilingual: boolean; required?: boolean;
+}) {
+  return (
+    <>
+      {fields.map((f) => (
+        <div className="field" key={f.key}>
+          <div className="field-l">{f.label}{required && f.required && ' *'}{f.answer && <span className="tag">answer key</span>}</div>
+          <FieldInput field={f} value={fieldValue({ data }, f)} bilingual={bilingual} onChange={(v) => onData({ ...data, [f.key]: v })} />
+          {bilingual && f.type === 'text' && (
+            <div className="second-box">
+              <div className="field-l">{f.label} — second language</div>
+              <RichInput boxed value={asText(data[secondKey(f.key)])} onChange={(v) => onData({ ...data, [secondKey(f.key)]: v })} />
+            </div>
+          )}
+        </div>
+      ))}
+    </>
+  );
+}
+
+const hasSecondLanguage = (v: unknown): boolean =>
+  !!v && typeof v === 'object' &&
+  Object.entries(v as Record<string, unknown>).some(([k, x]) => (k.endsWith('@2') && !!x) || (k === 'items2' && Array.isArray(x) && x.some(Boolean)) || hasSecondLanguage(x));
+
+function PartsInput({ value, onChange, bilingual }: { value: unknown; onChange: (v: unknown) => void; bilingual: boolean }) {
   const { db } = useStore();
   const pv = asParts(value);
   const setParts = (items: Part[], numbering: PartNumbering = pv.numbering) => onChange({ numbering, items });
@@ -49,12 +75,7 @@ function PartsInput({ value, onChange }: { value: unknown; onChange: (v: unknown
               <label className="check">Marks <input type="number" min={0} step={0.5} style={{ width: 70 }} value={p.marks} onChange={(e) => setPart(i, { marks: Number(e.target.value) })} /></label>
               <button className="ghost danger" onClick={() => setParts(pv.items.filter((_, j) => j !== i))}>✕</button>
             </div>
-            {t?.fields.map((f) => (
-              <div className="field" key={f.key}>
-                <div className="field-l">{f.label}{f.answer && <span className="tag">answer key</span>}</div>
-                <FieldInput field={f} value={fieldValue(p, f)} onChange={(v) => setPart(i, { data: { ...p.data, [f.key]: v } })} />
-              </div>
-            ))}
+            {t && <FieldList fields={t.fields} data={p.data} bilingual={bilingual} onData={(data) => setPart(i, { data })} />}
           </div>
         );
       })}
@@ -72,10 +93,10 @@ function PartsInput({ value, onChange }: { value: unknown; onChange: (v: unknown
   );
 }
 
-export function FieldInput({ field, value, onChange }: { field: FieldDef; value: unknown; onChange: (v: unknown) => void }) {
+export function FieldInput({ field, value, onChange, bilingual = false }: { field: FieldDef; value: unknown; onChange: (v: unknown) => void; bilingual?: boolean }) {
   switch (field.type) {
     case 'parts':
-      return <PartsInput value={value} onChange={onChange} />;
+      return <PartsInput value={value} onChange={onChange} bilingual={bilingual} />;
     case 'text':
       return <RichInput boxed value={asText(value)} onChange={onChange} />;
     case 'lines':
@@ -93,6 +114,7 @@ export function FieldInput({ field, value, onChange }: { field: FieldDef; value:
     case 'options': {
       const o = asOptions(value);
       const set = (next: Partial<OptionsValue>) => onChange({ ...o, ...next });
+      const items2 = o.items.map((_, i) => o.items2?.[i] ?? '');
       return (
         <div className="stack">
           {o.items.map((it, i) => (
@@ -100,8 +122,13 @@ export function FieldInput({ field, value, onChange }: { field: FieldDef; value:
               <input type="radio" title="Correct answer" checked={o.correct === i} onChange={() => set({ correct: i })} />
               <span>({letter(i)})</span>
               <RichInput boxed single className="grow" value={it} onChange={(t) => set({ items: o.items.map((x, j) => (j === i ? t : x)) })} />
+              {bilingual && <RichInput boxed single className="grow second" value={items2[i]} placeholder="second language" onChange={(t) => set({ items2: items2.map((x, j) => (j === i ? t : x)) })} />}
               <button className="ghost" disabled={o.items.length <= 2} onClick={() =>
-                set({ items: o.items.filter((_, j) => j !== i), correct: o.correct === i ? null : o.correct !== null && o.correct > i ? o.correct - 1 : o.correct })
+                set({
+                  items: o.items.filter((_, j) => j !== i),
+                  items2: items2.filter((_, j) => j !== i),
+                  correct: o.correct === i ? null : o.correct !== null && o.correct > i ? o.correct - 1 : o.correct,
+                })
               }>✕</button>
             </div>
           ))}
@@ -137,6 +164,7 @@ export default function QuestionForm({ initial, onClose }: { initial: Question; 
   const { db, update, t } = useStore();
   const [q, setQ] = useState(initial);
   const [error, setError] = useState<string | null>(null);
+  const [bilingual, setBilingual] = useState(() => hasSecondLanguage(initial.data));
   const template = db.templates.find((x) => x.id === q.templateId);
   const subjects = [...new Set(db.questions.map((x) => x.subject))];
   const chapters = [...new Set(db.questions.filter((x) => x.subject === q.subject).map((x) => x.chapter))];
@@ -179,12 +207,10 @@ export default function QuestionForm({ initial, onClose }: { initial: Question; 
       </div>
       <datalist id="subjects">{subjects.map((s) => <option key={s} value={s} />)}</datalist>
       <datalist id="chapters">{chapters.map((s) => <option key={s} value={s} />)}</datalist>
-      {template.fields.map((f) => (
-        <div className="field" key={f.key}>
-          <div className="field-l">{f.label}{f.required && ' *'}{f.answer && <span className="tag">{t('answerKey')}</span>}</div>
-          <FieldInput field={f} value={fieldValue(q, f)} onChange={(v) => setQ({ ...q, data: { ...q.data, [f.key]: v } })} />
-        </div>
-      ))}
+      <label className="check bilingual-toggle">
+        <input type="checkbox" checked={bilingual} onChange={(e) => setBilingual(e.target.checked)} /> Also write it in a second language (for bilingual papers)
+      </label>
+      <FieldList fields={template.fields} data={q.data} bilingual={bilingual} required onData={(data) => setQ({ ...q, data })} />
     </Modal>
   );
 }

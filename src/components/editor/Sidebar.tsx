@@ -1,6 +1,7 @@
 import type { Difficulty, Paper, Question, Section } from '../../shared/types';
 import { useStore } from '../../store';
 import StyleEditor from '../StyleEditor';
+import { PAPER_LANGS, type PaperLang } from '../../lib/labels';
 import { effectiveStyle } from '../../lib/fonts';
 import { marksDistribution, partsMarks, resolvePaper, type DistRow, type ResolvedQuestion } from '../../lib/paper';
 
@@ -35,21 +36,21 @@ function PaperPanel({ paper, setPaper, onSelectSection }: { paper: Paper; setPap
   return (
     <>
       <div className="panel">
-        <div className="panel-h">Marks</div>
+        <div className="panel-h">{t('marks')}</div>
         <div className={`big-marks ${status}`}>
-          <b>{totalMarks}</b>{target > 0 && <> / {target}</>} <span>marks</span>
+          <b>{totalMarks}</b>{target > 0 && <> / {target}</>} <span>{t('marksWord')}</span>
         </div>
         {status === 'under' && <div className="msg under">{target - totalMarks} marks still to add</div>}
         {status === 'over' && <div className="msg over">{totalMarks - target} marks over the maximum</div>}
         {status === 'ok' && <div className="msg ok">Matches the maximum marks ✓</div>}
-        <label>Maximum marks (target)
+        <label>{t('maxTarget')}
           <input type="number" min={0} value={target || ''} placeholder="e.g. 80" onChange={(e) => setPaper({ maxMarks: Number(e.target.value) || 0 })} />
         </label>
         {planned > 0 && target > 0 && planned !== target && <div className="msg under">Section plans add up to {planned}, not {target}.</div>}
       </div>
 
       <div className="panel">
-        <div className="panel-h">Marks distribution by section</div>
+        <div className="panel-h">{t('distBySection')}</div>
         <table className="dist">
           <thead><tr><th>Section</th><th>Questions</th><th>Marks</th></tr></thead>
           <tbody>
@@ -71,12 +72,12 @@ function PaperPanel({ paper, setPaper, onSelectSection }: { paper: Paper; setPap
         <div className="muted">Click a section to set its plan (type, number of questions, marks each).</div>
       </div>
 
-      <Bars title="By chapter" rows={dist.chapter} total={rawTotal} />
-      <Bars title="By difficulty" rows={dist.difficulty.map((r) => ({ ...r, label: t(r.label as Difficulty) }))} total={rawTotal} />
-      <Bars title="By question type" rows={dist.type} total={rawTotal} />
+      <Bars title={t('byChapter')} rows={dist.chapter} total={rawTotal} />
+      <Bars title={t('byDifficulty')} rows={dist.difficulty.map((r) => ({ ...r, label: t(r.label as Difficulty) }))} total={rawTotal} />
+      <Bars title={t('byType')} rows={dist.type} total={rawTotal} />
 
       <details className="panel" open>
-        <summary className="panel-h">Font &amp; spacing {customised ? <span className="tag">this paper</span> : <span className="tag">institution default</span>}</summary>
+        <summary className="panel-h">{t('fontSpacing')} {customised ? <span className="tag">this paper</span> : <span className="tag">institution default</span>}</summary>
         <StyleEditor value={style} onChange={(patch) => setPaper({ style: { ...paper.style, ...patch } })} />
         {customised && (
           <div className="row wrap">
@@ -91,7 +92,20 @@ function PaperPanel({ paper, setPaper, onSelectSection }: { paper: Paper; setPap
       </details>
 
       <div className="panel">
-        <div className="panel-h">Printing</div>
+        <div className="panel-h">{t('languageH')}</div>
+        <label>Printed words ("Class", "Max. Marks", "OR"…)
+          <select value={paper.labelLang ?? 'en'} onChange={(e) => setPaper({ labelLang: e.target.value as PaperLang })}>
+            {PAPER_LANGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={!!paper.bilingual} onChange={(e) => setPaper({ bilingual: e.target.checked })} /> Bilingual questions
+        </label>
+        <div className="muted">Shows a second-language box under every question and option. Both versions are printed, one below the other.</div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-h">{t('printing')}</div>
         <label className="check"><input type="checkbox" checked={paper.answerSpace} onChange={(e) => setPaper({ answerSpace: e.target.checked })} /> {t('answerSpace')}</label>
       </div>
     </>
@@ -101,7 +115,7 @@ function PaperPanel({ paper, setPaper, onSelectSection }: { paper: Paper; setPap
 function SectionPanel({ paper, section, setSection, onAutoFill, onMove, onDelete }: {
   paper: Paper; section: Section; setSection: (p: Partial<Section>) => void; onAutoFill: () => void; onMove: (d: number) => void; onDelete: () => void;
 }) {
-  const { db } = useStore();
+  const { db, t } = useStore();
   const rs = resolvePaper(paper, db).sections.find((s) => s.id === section.id)!;
   const count = section.count ?? 0;
   const each = section.marksEach ?? 0;
@@ -111,12 +125,12 @@ function SectionPanel({ paper, section, setSection, onAutoFill, onMove, onDelete
   return (
     <>
       <div className="panel">
-        <div className="panel-h">Section</div>
+        <div className="panel-h">{t('section')}</div>
         <label>Title<input value={section.title} onChange={(e) => setSection({ title: e.target.value })} /></label>
         <label>Instruction<input value={section.instruction} placeholder={rs.attempt ? `Answer any ${rs.attempt}…  (added automatically)` : 'Optional'} onChange={(e) => setSection({ instruction: e.target.value })} /></label>
       </div>
       <div className="panel">
-        <div className="panel-h">Marks plan</div>
+        <div className="panel-h">{t('marksPlan')}</div>
         <label>Question type
           <select value={section.templateId ?? ''} onChange={(e) => setSection({ templateId: e.target.value })}>
             <option value="">Any type</option>
@@ -141,7 +155,7 @@ function SectionPanel({ paper, section, setSection, onAutoFill, onMove, onDelete
           <span>{rs.questions.length}{count > 0 && ` of ${count}`} questions · {rs.marks} marks</span>
         </div>
         <button className="primary block" disabled={!count || rs.questions.length >= count} onClick={onAutoFill}>
-          ✨ Auto-fill from question bank
+          ✨ {t('autoFill')}
         </button>
         <div className="muted">Picks unused {paper.subject || ''} questions of this type, spread across chapters.</div>
       </div>
@@ -202,7 +216,7 @@ function QuestionPanel({ rq, isAlt, sharedWith, onMakeCopy, section, onChange, o
         ))}
       </div>
       <div className="panel">
-        <div className="panel-h">Internal choice (either / or)</div>
+        <div className="panel-h">{t('eitherOr')}</div>
         {rq.alt ? (
           <>
             <div className="msg ok">Q{rq.number} has an OR question. Students answer one of them.</div>
@@ -216,8 +230,8 @@ function QuestionPanel({ rq, isAlt, sharedWith, onMakeCopy, section, onChange, o
           <>
             <div className="muted">Print another question under the same number with "OR" between them.</div>
             <div className="row wrap">
-              <button onClick={onAddAltNew}>+ New OR question</button>
-              <button onClick={onAddAltBank}>📚 OR from bank</button>
+              <button onClick={onAddAltNew}>+ {t('newOr')}</button>
+              <button onClick={onAddAltBank}>📚 {t('orFromBank')}</button>
             </div>
           </>
         )}
@@ -226,8 +240,8 @@ function QuestionPanel({ rq, isAlt, sharedWith, onMakeCopy, section, onChange, o
         <div className="muted">This question is saved in the question bank. Edits here update it everywhere it is used.</div>
         {!isAlt && (
           <div className="row" style={{ marginTop: 8 }}>
-            <button onClick={onDuplicate}>⧉ Duplicate</button>
-            <button className="danger" onClick={onRemove}>Remove from paper</button>
+            <button onClick={onDuplicate}>⧉ {t('duplicate')}</button>
+            <button className="danger" onClick={onRemove}>{t('removeFromPaper')}</button>
           </div>
         )}
       </div>

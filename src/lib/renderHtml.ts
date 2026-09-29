@@ -1,8 +1,9 @@
 import type { DB, Paper, Question, Template } from '../shared/types';
 import { esc, letter, seededOrder } from './util';
-import { asOptions, asPairs, asParts, asText, fieldValue, lockedView, optionColumns, partLabel, resolvePaper, sectionInstruction, type ResolvedQuestion } from './paper';
+import { asOptions, asPairs, asParts, asText, fieldValue, lockedView, optionColumns, partLabel, resolvePaper, secondKey, sectionInstruction, type ResolvedQuestion } from './paper';
 import { hasImage, richHtml } from './rich';
 import { effectiveStyle, styleVars } from './fonts';
+import { paperLabels, type LabelKey } from './labels';
 
 // Every size is relative to --fs (body size) so the font-size setting scales the whole paper.
 export const PAPER_CSS = `
@@ -29,6 +30,7 @@ export const PAPER_CSS = `
 .qp .t { white-space: pre-wrap; display: flow-root; }
 .qp .opts { display: grid; gap: 2px 12px; margin-top: 3px; }
 .qp .opts > div { white-space: pre-wrap; }
+.qp .t2 { margin-top: 1pt; }
 .qp .opts.c4 { grid-template-columns: repeat(4, 1fr); }
 .qp .opts.c2 { grid-template-columns: repeat(2, 1fr); }
 .qp .opts.c1 { grid-template-columns: 1fr; }
@@ -58,7 +60,20 @@ type QLike = Pick<Question, 'id' | 'data'>;
 const grid = (num: string, body: string, marks: string, cls = '') =>
   `<div class="q ${cls}"><div class="qn">${num}</div><div>${body}</div><div class="qm">${marks}</div></div>`;
 
-function renderFields(q: QLike, template: Template, db: DB, answerKey: boolean, answerSpace: boolean): string {
+interface Ctx {
+  db: DB;
+  answerKey: boolean;
+  answerSpace: boolean;
+  bilingual: boolean;
+  L: (k: LabelKey) => string;
+}
+
+/** Built-in answer fields print as "Answer"/"Model answer" in the paper's language; custom ones keep their label. */
+export const answerLabel = (template: Template, label: string, L: (k: LabelKey) => string) =>
+  !template.builtin ? label : /model/i.test(label) ? L('modelAnswer') : L('answer');
+
+function renderFields(q: QLike, template: Template, ctx: Ctx): string {
+  const { db, answerKey, answerSpace, bilingual, L } = ctx;
   const rich = (s: string) => richHtml(s, db.images);
   const parts: string[] = [];
   for (const f of template.fields) {
@@ -67,21 +82,28 @@ function renderFields(q: QLike, template: Template, db: DB, answerKey: boolean, 
     switch (f.type) {
       case 'text': {
         const text = asText(v);
-        if (!text) break;
-        parts.push(f.answer ? `<div class="ans"><b>${esc(f.label)}:</b> ${rich(text)}</div>` : `<div class="t">${rich(text)}</div>`);
+        const text2 = bilingual ? asText(q.data[secondKey(f.key)]) : '';
+        if (!text && !text2) break;
+        if (f.answer) {
+          parts.push(`<div class="ans"><b>${esc(answerLabel(template, f.label, L))}:</b> ${rich(text)}${text2 ? `<div class="t2">${rich(text2)}</div>` : ''}</div>`);
+        } else {
+          parts.push(`<div class="t">${rich(text)}</div>`);
+          if (text2) parts.push(`<div class="t t2">${rich(text2)}</div>`);
+        }
         break;
       }
       case 'truefalse':
-        if (typeof v === 'boolean') parts.push(`<div class="ans"><b>${esc(f.label)}:</b> ${v ? 'True' : 'False'}</div>`);
+        if (typeof v === 'boolean') parts.push(`<div class="ans"><b>${esc(answerLabel(template, f.label, L))}:</b> ${L(v ? 'true' : 'false')}</div>`);
         break;
       case 'options': {
-        const { items, correct } = asOptions(v);
+        const { items, items2, correct } = asOptions(v);
+        const second = (i: number) => (bilingual && items2?.[i] ? `\n${rich(items2[i])}` : '');
         const cells = items
-          .map((it, i) => `<div class="${answerKey && i === correct ? 'ok' : ''}">(${letter(i)}) ${rich(it)}</div>`)
+          .map((it, i) => `<div class="${answerKey && i === correct ? 'ok' : ''}">(${letter(i)}) ${rich(it)}${second(i)}</div>`)
           .join('');
-        parts.push(`<div class="opts c${optionColumns(items)}">${cells}</div>`);
+        parts.push(`<div class="opts c${optionColumns(bilingual ? [...items, ...(items2 ?? [])] : items)}">${cells}</div>`);
         // Picture options: the underlined option is enough, don't print the picture twice.
-        if (answerKey && correct !== null) parts.push(`<div class="ans"><b>Answer:</b> (${letter(correct)}) ${hasImage(items[correct]) ? '' : rich(items[correct])}</div>`);
+        if (answerKey && correct !== null) parts.push(`<div class="ans"><b>${L('answer')}:</b> (${letter(correct)}) ${hasImage(items[correct]) ? '' : rich(items[correct])}</div>`);
         break;
       }
       case 'pairs': {
@@ -93,7 +115,7 @@ function renderFields(q: QLike, template: Template, db: DB, answerKey: boolean, 
         parts.push(`<table class="pairs"><tr><th>A</th><th>B</th></tr>${rows}</table>`);
         if (answerKey) {
           const key = pairs.map((_, i) => `${i + 1} → (${letter(order.indexOf(i))})`).join(',  ');
-          parts.push(`<div class="ans"><b>Answer:</b> ${key}</div>`);
+          parts.push(`<div class="ans"><b>${L('answer')}:</b> ${key}</div>`);
         }
         break;
       }
@@ -106,7 +128,7 @@ function renderFields(q: QLike, template: Template, db: DB, answerKey: boolean, 
         const { numbering, items } = asParts(v);
         items.forEach((p, i) => {
           const t = db.templates.find((x) => x.id === p.templateId);
-          if (t) parts.push(grid(partLabel(numbering, i), renderFields(p, t, db, answerKey, answerSpace), `[${p.marks}]`, 'part'));
+          if (t) parts.push(grid(partLabel(numbering, i), renderFields(p, t, ctx), `[${p.marks}]`, 'part'));
         });
         break;
       }
@@ -115,10 +137,10 @@ function renderFields(q: QLike, template: Template, db: DB, answerKey: boolean, 
   return parts.join('');
 }
 
-function renderQuestion({ number, question: q, template, marks, alt }: ResolvedQuestion, db: DB, answerKey: boolean, answerSpace: boolean) {
-  const main = grid(`${number}.`, renderFields(q, template, db, answerKey, answerSpace), `[${marks}]`);
+function renderQuestion({ number, question: q, template, marks, alt }: ResolvedQuestion, ctx: Ctx) {
+  const main = grid(`${number}.`, renderFields(q, template, ctx), `[${marks}]`);
   if (!alt) return main;
-  return `<div class="either">${main}<div class="or">OR</div>${grid('', renderFields(alt.question, alt.template, db, answerKey, answerSpace), '')}</div>`;
+  return `<div class="either">${main}<div class="or">${ctx.L('or')}</div>${grid('', renderFields(alt.question, alt.template, ctx), '')}</div>`;
 }
 
 export function renderPaperHtml(paper: Paper, liveDb: DB, answerKey: boolean) {
@@ -127,6 +149,8 @@ export function renderPaperHtml(paper: Paper, liveDb: DB, answerKey: boolean) {
   const rich = (t: string) => richHtml(t, db.images);
   const { sections, totalMarks, missing } = resolvePaper(paper, db);
   const style = effectiveStyle(s.paperStyle, paper.style);
+  const L = paperLabels(paper.labelLang);
+  const ctx: Ctx = { db, answerKey, answerSpace: paper.answerSpace, bilingual: !!paper.bilingual, L };
   const header = `
     <div class="hd">
       <div class="hd-top">
@@ -136,12 +160,12 @@ export function renderPaperHtml(paper: Paper, liveDb: DB, answerKey: boolean) {
           ${s.address ? `<div class="addr">${esc(s.address)}</div>` : ''}
         </div>
       </div>
-      <div class="exam">${esc(paper.examName)}${answerKey ? ' — ANSWER KEY' : ''}</div>
+      <div class="exam">${esc(paper.examName)}${answerKey ? ` — ${L('answerKey')}` : ''}</div>
     </div>
-    <div class="meta"><span>Class: ${esc(paper.className)}</span><span>Subject: ${esc(paper.subject)}</span></div>
-    <div class="meta"><span>Time: ${esc(paper.duration)}</span>${paper.date ? `<span>Date: ${esc(paper.date)}</span>` : ''}<span>Max. Marks: ${totalMarks}</span></div>`;
+    <div class="meta"><span>${L('class')}: ${esc(paper.className)}</span><span>${L('subject')}: ${esc(paper.subject)}</span></div>
+    <div class="meta"><span>${L('time')}: ${esc(paper.duration)}</span>${paper.date ? `<span>${L('date')}: ${esc(paper.date)}</span>` : ''}<span>${L('maxMarks')}: ${totalMarks}</span></div>`;
   const instructions = paper.instructions.trim()
-    ? `<div class="gi"><div class="gi-title">General Instructions:</div><p>${rich(paper.instructions.trim())}</p></div>`
+    ? `<div class="gi"><div class="gi-title">${L('instructions')}:</div><p>${rich(paper.instructions.trim())}</p></div>`
     : '';
   const body = sections
     .map((sec) => {
@@ -150,10 +174,10 @@ export function renderPaperHtml(paper: Paper, liveDb: DB, answerKey: boolean) {
     <div class="sec">
       ${sec.title || sec.marksLabel ? `<div class="sec-h"><span>${esc(sec.title)}</span><span>${esc(sec.marksLabel)}</span></div>` : ''}
       ${instr ? `<div class="sec-i">${rich(instr)}</div>` : ''}
-      ${sec.questions.map((q) => renderQuestion(q, db, answerKey, paper.answerSpace)).join('')}
+      ${sec.questions.map((q) => renderQuestion(q, ctx)).join('')}
     </div>`;
     })
     .join('');
   const warn = missing ? `<p class="warn">${missing} question(s) in this paper no longer exist in the bank.</p>` : '';
-  return `<div class="qp" style="${styleVars(style)}">${header}${instructions}${warn}${body}<div class="end">*** End of Paper ***</div></div>`;
+  return `<div class="qp" style="${styleVars(style)}">${header}${instructions}${warn}${body}<div class="end">${L('end')}</div></div>`;
 }

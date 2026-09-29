@@ -102,13 +102,13 @@ export default function Share() {
         )}
       </div>
       <div className="card">
-        <h2>Backup &amp; restore</h2>
+        <h2>{t('backupRestore')}</h2>
         <p className="muted">A backup holds everything: all questions, papers, templates, images and settings. Keep one on a pen drive or in your email.</p>
         <div className="row wrap">
-          <button className="primary" onClick={saveBackup}>⤓ Save backup file…</button>
-          <button onClick={restoreFromFile}>Restore from backup file…</button>
+          <button className="primary" onClick={saveBackup}>⤓ {t('saveBackup')}</button>
+          <button onClick={restoreFromFile}>{t('restoreFile')}</button>
         </div>
-        <h3>Automatic backups</h3>
+        <h3>{t('autoBackups')}</h3>
         <p className="muted">QMaker keeps a copy of your data every day (the last 14 days), and before every restore.</p>
         {!backups.length && <p className="muted">No automatic backups yet — the first is made the next time you edit something.</p>}
         <table className="list compact">
@@ -118,12 +118,12 @@ export default function Share() {
                 <td className="grow">{backupLabel(b.name)}</td>
                 <td className="muted">{new Date(b.time).toLocaleString()}</td>
                 <td className="muted">{Math.max(1, Math.round(b.size / 1024))} KB</td>
-                <td><button onClick={async () => restore(await window.qmaker.readBackup(b.name), backupLabel(b.name))}>Restore</button></td>
+                <td><button onClick={async () => restore(await window.qmaker.readBackup(b.name), backupLabel(b.name))}>{t('restore')}</button></td>
               </tr>
             ))}
           </tbody>
         </table>
-        <button className="ghost" onClick={() => window.qmaker.openBackupFolder()}>Open backups folder</button>
+        <button className="ghost" onClick={() => window.qmaker.openBackupFolder()}>{t('openBackups')}</button>
       </div>
     </div>
   );

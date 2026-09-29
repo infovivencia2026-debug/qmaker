@@ -1,4 +1,5 @@
 import { maxImageWidth, plainText } from './rich';
+import { paperLabels, type PaperLang } from './labels';
 import type { Section, DB, FieldDef, OptionsValue, PairsValue, Paper, Part, PartNumbering, PartsValue, Question, Template } from '../shared/types';
 
 /** Everything a renderer (HTML or DOCX) needs, resolved once. */
@@ -22,6 +23,7 @@ export interface ResolvedSection {
   /** e.g. "10 × 1 = 10" when every question carries the same marks. */
   marksLabel: string;
   attempt: number;
+  lang: PaperLang;
   plannedCount: number;
   /** null when the section has no complete plan. */
   plannedMarks: number | null;
@@ -82,10 +84,10 @@ export function resolvePaper(paper: Paper, liveDb: DB) {
     // With a choice, the student's best answers count: take the highest-mark questions.
     const marks = [...qs].map((q) => q.marks).sort((a, b) => b - a).slice(0, counted).reduce((a, b) => a + b, 0);
     const same = qs.length > 0 && qs.every((q) => q.marks === qs[0].marks);
-    const marksLabel = !qs.length ? '' : same && counted > 1 ? `${counted} × ${qs[0].marks} = ${marks}` : `${marks} Marks`;
+    const marksLabel = !qs.length ? '' : same && counted > 1 ? `${counted} × ${qs[0].marks} = ${marks}` : `${marks} ${paperLabels(paper.labelLang)('marks')}`;
     const plannedCount = s.count ?? 0;
     const plannedMarks = plannedCount && s.marksEach ? Math.min(s.attempt || plannedCount, plannedCount) * s.marksEach : null;
-    return { id: s.id, title: s.title, instruction: s.instruction, questions: qs, marks, marksLabel, attempt, plannedCount, plannedMarks };
+    return { id: s.id, title: s.title, instruction: s.instruction, questions: qs, marks, marksLabel, attempt, lang: paper.labelLang ?? 'en', plannedCount, plannedMarks };
   });
   const totalMarks = sections.reduce((sum, s) => sum + s.marks, 0);
   return { sections, totalMarks, missing };
@@ -94,7 +96,7 @@ export function resolvePaper(paper: Paper, liveDb: DB) {
 /** Section heading instruction, adding "Answer any N" automatically when a choice is set. */
 export function sectionInstruction(s: ResolvedSection) {
   if (s.instruction.trim() || !s.attempt) return s.instruction;
-  return `Answer any ${s.attempt} of the following ${s.questions.length} questions.`;
+  return paperLabels(s.lang)('anyOf', { n: s.attempt, m: s.questions.length });
 }
 
 export interface DistRow { label: string; marks: number; count: number }
@@ -128,10 +130,17 @@ export const asText = (v: unknown) => (typeof v === 'string' ? v : '');
 
 export function asOptions(v: unknown): OptionsValue {
   const o = v as OptionsValue | undefined;
-  return { items: Array.isArray(o?.items) ? o.items : [], correct: typeof o?.correct === 'number' ? o.correct : null };
+  return {
+    items: Array.isArray(o?.items) ? o.items : [],
+    items2: Array.isArray(o?.items2) ? o.items2 : undefined,
+    correct: typeof o?.correct === 'number' ? o.correct : null,
+  };
 }
 
 export const asPairs = (v: unknown): PairsValue => (Array.isArray(v) ? (v as PairsValue).filter((p) => p[0] || p[1]) : []);
+
+/** Key holding a text field's second-language version. */
+export const secondKey = (key: string) => `${key}@2`;
 
 /** Options print in 4, 2 or 1 columns depending on how long they are. */
 export function optionColumns(items: string[]) {

@@ -283,3 +283,9 @@ table.list.compact td { padding: 6px 10px; }
 button.locked-btn { background: #fcf9e8; border-color: var(--warn); color: #614a00; }
 .blk-shared { padding: 6px 10px; background: #fcf9e8; color: #614a00; border-right: 1px solid var(--line); white-space: nowrap; }
 .shared-panel { background: #fffdf5; }
+.qp .rich.second > textarea.ib { color: #1d4f91; }
+.qp .rich.second > textarea.ib::placeholder { color: #9bb5d6; }
+.qp .opt-texts { display: flex; flex-direction: column; min-width: 0; }
+.second-box { margin-top: 4px; padding-left: 10px; border-left: 3px solid #9bb5d6; }
+.rich.boxed.second { background: #f5f8fd; }
+.bilingual-toggle { margin: 4px 0 12px; }

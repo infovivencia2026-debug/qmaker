@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { OptionsValue, PairsValue, Part, PartNumbering, Question, Template } from '../../shared/types';
 import { isGroupTemplate } from '../../shared/templates';
-import { asOptions, asParts, asText, fieldValue, optionColumns, partLabel, type ResolvedQuestion } from '../../lib/paper';
+import { asOptions, asParts, asText, fieldValue, optionColumns, partLabel, secondKey, type ResolvedQuestion } from '../../lib/paper';
 import { letter, uid } from '../../lib/util';
 import { useStore } from '../../store';
 import RichInput from '../RichInput';
@@ -16,8 +16,8 @@ export function blankPart(t: Template): Part {
 }
 
 /** Fields of a question (or a part) edited in place on the page. */
-export function InlineFields({ q, template, selected, answerSpace, onData }: {
-  q: Pick<Question, 'id' | 'data'>; template: Template; selected: boolean; answerSpace: boolean; onData: (d: Data) => void;
+export function InlineFields({ q, template, selected, answerSpace, bilingual = false, onData }: {
+  q: Pick<Question, 'id' | 'data'>; template: Template; selected: boolean; answerSpace: boolean; bilingual?: boolean; onData: (d: Data) => void;
 }) {
   const { db } = useStore();
   const [adding, setAdding] = useState(false);
@@ -31,26 +31,43 @@ export function InlineFields({ q, template, selected, answerSpace, onData }: {
         const v = fieldValue(q, f);
         switch (f.type) {
           case 'text':
-            return <RichInput key={f.key} className="t" value={asText(v)} placeholder={f.label} onChange={(t) => set(f.key, t)} />;
+            return (
+              <div key={f.key}>
+                <RichInput className="t" value={asText(v)} placeholder={f.label} onChange={(t) => set(f.key, t)} />
+                {bilingual && (
+                  <RichInput className="t t2 second" value={asText(q.data[secondKey(f.key)])} placeholder={`${f.label} — second language`} onChange={(t) => set(secondKey(f.key), t)} />
+                )}
+              </div>
+            );
           case 'options': {
             const o = asOptions(v);
             const setO = (next: Partial<OptionsValue>) => set(f.key, { ...o, ...next });
+            const items2 = o.items.map((_, i) => o.items2?.[i] ?? '');
             return (
               <div key={f.key}>
-                <div className={`opts c${optionColumns(o.items)}`}>
+                <div className={`opts c${bilingual ? Math.min(2, optionColumns([...o.items, ...items2])) : optionColumns(o.items)}`}>
                   {o.items.map((it, i) => (
                     <div key={i} className={`opt ${selected && o.correct === i ? 'ok-edit' : ''}`}>
                       <button className="optl" title="Mark as correct answer" onClick={() => setO({ correct: o.correct === i ? null : i })}>({letter(i)})</button>
-                      <RichInput single className="grow" value={it} placeholder={`Option ${letter(i)}`} onChange={(t) => setO({ items: o.items.map((x, j) => (j === i ? t : x)) })} />
+                      <div className="grow opt-texts">
+                        <RichInput single value={it} placeholder={`Option ${letter(i)}`} onChange={(t) => setO({ items: o.items.map((x, j) => (j === i ? t : x)) })} />
+                        {bilingual && (
+                          <RichInput single className="second" value={items2[i]} placeholder="second language" onChange={(t) => setO({ items2: items2.map((x, j) => (j === i ? t : x)) })} />
+                        )}
+                      </div>
                       {selected && o.items.length > 2 && (
-                        <button className="mini" onClick={() => setO({ items: o.items.filter((_, j) => j !== i), correct: o.correct === i ? null : o.correct !== null && o.correct > i ? o.correct - 1 : o.correct })}>×</button>
+                        <button className="mini" onClick={() => setO({
+                          items: o.items.filter((_, j) => j !== i),
+                          items2: items2.filter((_, j) => j !== i),
+                          correct: o.correct === i ? null : o.correct !== null && o.correct > i ? o.correct - 1 : o.correct,
+                        })}>×</button>
                       )}
                     </div>
                   ))}
                 </div>
                 {selected && (
                   <div className="blk-hint">
-                    {o.items.length < 8 && <button className="mini" onClick={() => setO({ items: [...o.items, ''] })}>+ option</button>}
+                    {o.items.length < 8 && <button className="mini" onClick={() => setO({ items: [...o.items, ''], items2: [...items2, ''] })}>+ option</button>}
                     <span>Click a letter to mark the correct answer{o.correct === null ? ' — none marked yet' : ''}.</span>
                   </div>
                 )}
@@ -97,7 +114,7 @@ export function InlineFields({ q, template, selected, answerSpace, onData }: {
                   return (
                     <div key={p.id} className="q part">
                       <div className="qn">{partLabel(pv.numbering, i)}</div>
-                      <div>{t ? <InlineFields q={p} template={t} selected={selected} answerSpace={answerSpace} onData={(data) => setPart(i, { data })} /> : <i>missing template</i>}</div>
+                      <div>{t ? <InlineFields q={p} template={t} selected={selected} answerSpace={answerSpace} bilingual={bilingual} onData={(data) => setPart(i, { data })} /> : <i>missing template</i>}</div>
                       <div className="qm part-m">
                         {selected ? (
                           <>
@@ -156,7 +173,13 @@ export function InlineFields({ q, template, selected, answerSpace, onData }: {
                   ))}
                 </div>
               );
-            if (f.type === 'text') return <RichInput key={f.key} value={asText(v)} placeholder={f.label} onChange={(t) => set(f.key, t)} />;
+            if (f.type === 'text')
+              return (
+                <div key={f.key}>
+                  <RichInput value={asText(v)} placeholder={f.label} onChange={(t) => set(f.key, t)} />
+                  {bilingual && <RichInput className="second" value={asText(q.data[secondKey(f.key)])} placeholder={`${f.label} — second language`} onChange={(t) => set(secondKey(f.key), t)} />}
+                </div>
+              );
             return null;
           })}
         </div>
@@ -178,10 +201,11 @@ interface Props {
   onRemove: () => void;
   /** Number of other papers that also use this question. */
   sharedCount?: number;
+  bilingual?: boolean;
 }
 
 /** A question edited in place on the page, styled like the printed paper. */
-export default function QuestionBlock({ rq, which = 'main', selected, answerSpace, onSelect, onData, onMove, onDuplicate, onRemove, sharedCount = 0 }: Props) {
+export default function QuestionBlock({ rq, which = 'main', selected, answerSpace, onSelect, onData, onMove, onDuplicate, onRemove, sharedCount = 0, bilingual = false }: Props) {
   const isAlt = which === 'alt';
   const q = isAlt ? rq.alt!.question : rq.question;
   const template = isAlt ? rq.alt!.template : rq.template;
@@ -199,7 +223,7 @@ export default function QuestionBlock({ rq, which = 'main', selected, answerSpac
         </div>
       )}
       <div className="qn">{isAlt ? '' : `${rq.number}.`}</div>
-      <div><InlineFields q={q} template={template} selected={selected} answerSpace={answerSpace} onData={onData} /></div>
+      <div><InlineFields q={q} template={template} selected={selected} answerSpace={answerSpace} bilingual={bilingual} onData={onData} /></div>
       <div className="qm">{isAlt ? '' : `[${rq.marks}]`}</div>
     </div>
   );
