@@ -16,7 +16,8 @@ export function normalize(raw: unknown): DB {
   // First run after the Box update: the old question bank becomes the library.
   const library = db.library ?? questions.flatMap((q) => questionToBox(q, { templates, questions, papers, images: {}, library: [] } as unknown as DB) ?? []);
   const used = collectImageIds([questions, papers, library]);
-  const images = Object.fromEntries(Object.entries(db.images ?? {}).filter(([id]) => used.has(id)));
+  // Unused pictures are dropped unless they were named (then they belong to the image store).
+  const images = Object.fromEntries(Object.entries(db.images ?? {}).filter(([id, a]) => used.has(id) || a.name));
   return {
     version: 1,
     settings: { institutionName: '', address: '', logo: '', uiLang: 'en', ...db.settings, paperStyle: { ...DEFAULT_STYLE, ...db.settings?.paperStyle } },
@@ -45,8 +46,11 @@ interface Store {
   canRedo: boolean;
   /** Replaces everything (restore from backup). Undoable. */
   replaceDb: (raw: unknown) => void;
-  /** Compresses and stores an image; returns it so the caller can insert a token. */
+  /** Compresses and stores an image (named after its file); returns it so the caller can insert it. */
   addImage: (blob: Blob) => Promise<ImageAsset | null>;
+  /** Images just added and waiting for the user to confirm their names. */
+  toName: string[];
+  doneNaming: () => void;
 }
 
 const Ctx = createContext<Store | null>(null);
@@ -138,10 +142,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => clearTimeout(timer);
   }, [toast]);
 
+  const [toName, setToName] = useState<string[]>([]);
   const addImage = useCallback(async (blob: Blob) => {
     try {
-      const img = await imageFromBlob(blob);
+      const fileName = blob instanceof File && blob.name ? blob.name.replace(/\.[^.]+$/, '') : '';
+      const stamp = new Date().toLocaleString();
+      const img = { ...(await imageFromBlob(blob)), name: fileName || `Pasted image ${stamp}`, addedAt: Date.now() };
       update((db) => ({ ...db, images: { ...db.images, [img.id]: img } }));
+      setToName((l) => [...l, img.id]);
       return img;
     } catch (e) {
       notify(`Could not add image: ${(e as Error).message}`);
@@ -153,7 +161,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   if (error) return <div className="fatal">QMaker could not open its data: {error}</div>;
   if (!db) return null;
-  return <Ctx.Provider value={{ db, update, t, toast, notify, addImage, undo, redo, canUndo: past.current.length > 0, canRedo: future.current.length > 0, replaceDb }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ db, update, t, toast, notify, addImage, toName, doneNaming: () => setToName([]), undo, redo, canUndo: past.current.length > 0, canRedo: future.current.length > 0, replaceDb }}>{children}</Ctx.Provider>;
 }
 
 export function useStore() {

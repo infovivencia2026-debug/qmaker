@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react';
 import { useStore } from './store';
 import { mergeBundle, parseBundle, storeBundleImages } from './lib/bundle';
 import Papers from './pages/Papers';
-import Bank from './pages/Bank';
-import Templates from './pages/Templates';
+import Library from './pages/Library';
+import Images from './pages/Images';
+import ImageNamer from './components/images/ImageNamer';
 import Share from './pages/Share';
 import Settings from './pages/Settings';
 
-type Page = 'papers' | 'bank' | 'templates' | 'share' | 'settings';
+type Page = 'papers' | 'library' | 'images' | 'share' | 'settings';
 
 export default function App() {
   const { t, toast, update, notify, undo, redo, canUndo, canRedo } = useStore();
@@ -20,7 +21,7 @@ export default function App() {
         const bundle = await storeBundleImages(parseBundle(f.text));
         update((db) => mergeBundle(db, bundle).db);
         notify(`Imported ${f.name}: ${bundle.questions.length} questions, ${bundle.papers.length} papers`);
-        setPage(bundle.kind === 'paper' ? 'papers' : 'bank');
+        setPage(bundle.kind === 'paper' ? 'papers' : 'library');
       } catch (e) {
         notify(`${f.name}: ${(e as Error).message}`);
       }
@@ -42,7 +43,7 @@ export default function App() {
   }, [undo, redo]);
 
   const nav: [Page, string][] = [
-    ['papers', t('papers')], ['bank', t('bank')], ['templates', t('templates')], ['share', t('share')], ['settings', t('settings')],
+    ['papers', t('papers')], ['library', 'Library'], ['images', 'Images'], ['share', t('share')], ['settings', t('settings')],
   ];
   return (
     <div className="app">
@@ -58,11 +59,12 @@ export default function App() {
       </nav>
       <main className="main">
         {page === 'papers' && <Papers />}
-        {page === 'bank' && <Bank />}
-        {page === 'templates' && <Templates />}
+        {page === 'library' && <Library />}
+        {page === 'images' && <Images />}
         {page === 'share' && <Share />}
         {page === 'settings' && <Settings />}
       </main>
+      <ImageNamer />
       {toast && (
         <div className="toast">
           <span>{toast.message}</span>

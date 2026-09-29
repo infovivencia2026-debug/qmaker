@@ -3,6 +3,7 @@ import type { Editor } from '@tiptap/react';
 import { useStore } from '../../store';
 import { insertImages } from '../RichInput';
 import { useActiveEditor } from './activeEditor';
+import ImagePicker from '../images/ImagePicker';
 
 const SYMBOLS = '√ ∛ π ° ± × ÷ = ≠ ≈ ≤ ≥ < > ∞ ∠ △ ⊥ ∥ ∴ ∵ ∈ ∉ ⊂ ∪ ∩ ∅ α β γ δ θ λ μ σ ω Ω Σ Δ → ← ↔ ⇌ ↑ ↓ ½ ⅓ ¼ ¾ ² ³ ₂ ₃ ⁻ ✓ ✗ ☐ ★ ₹ %'.split(' ');
 
@@ -46,6 +47,7 @@ export default function Toolbar() {
   const editor = useActiveEditor();
   const { addImage } = useStore();
   const [menu, setMenu] = useState<null | 'insert' | 'table' | 'symbols'>(null);
+  const [storeOpen, setStoreOpen] = useState(false);
   const file = useRef<HTMLInputElement>(null);
   const multi = useRef(false);
 
@@ -86,6 +88,7 @@ export default function Toolbar() {
           <div className="rb-pop rb-list">
             <button onMouseDown={(ev) => ev.preventDefault()} onClick={() => { multi.current = false; file.current?.click(); close(); }}>🖼 Image</button>
             <button onMouseDown={(ev) => ev.preventDefault()} onClick={() => { multi.current = true; file.current?.click(); close(); }}>🖼🖼 Row of images (pick several)</button>
+            <button onMouseDown={(ev) => ev.preventDefault()} onClick={() => { setStoreOpen(true); close(); }}>🗂 From image store (search by name)…</button>
             <button onMouseDown={(ev) => ev.preventDefault()} onClick={() => { insertTable(e, 1, 2, true); close(); }}>▥ Two columns (layout grid)</button>
             <button onMouseDown={(ev) => ev.preventDefault()} onClick={() => { insertTable(e, 1, 3, true); close(); }}>▥ Three columns (layout grid)</button>
             <button onMouseDown={(ev) => ev.preventDefault()} onClick={() => { c().insertContent({ type: 'answerLines', attrs: { lines: 3 } }).run(); close(); }}>☰ Answer lines</button>
@@ -138,6 +141,16 @@ export default function Toolbar() {
         }}
       />
       {menu && <div className="rb-shade" onMouseDown={close} />}
+      {storeOpen && e && (
+        <ImagePicker
+          onClose={() => setStoreOpen(false)}
+          onPick={(ids) => {
+            setStoreOpen(false);
+            if (ids.length === 1) c().insertContent({ type: 'qimage', attrs: { id: ids[0], width: 40, align: 'inline' } }).run();
+            else c().insertContent(`<table data-borderless="true"><tbody><tr>${ids.map((id) => `<td><p style="text-align: center"><img data-id="${id}" data-width="25" data-align="inline"></p></td>`).join('')}</tr></tbody></table><p></p>`).run();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -27,7 +27,7 @@ export async function storeImage(a: ImageAsset): Promise<ImageAsset> {
   if (a.file || !a.src?.startsWith('data:')) return a;
   const file = `${a.id}.${a.src.startsWith('data:image/png') ? 'png' : 'jpg'}`;
   await window.qmaker.saveImage(file, dataUrlToBytes(a.src));
-  return { id: a.id, w: a.w, h: a.h, file };
+  return { id: a.id, w: a.w, h: a.h, file, name: a.name, addedAt: a.addedAt };
 }
 
 export async function storeImages(images: Record<string, ImageAsset> = {}) {
@@ -41,7 +41,7 @@ export async function embedImages(images: Record<string, ImageAsset>) {
   const out: Record<string, ImageAsset> = {};
   for (const [id, a] of Object.entries(images)) {
     try {
-      out[id] = a.file ? { id, w: a.w, h: a.h, src: bytesToDataUrl(await imageBytes(a), imgType(a) === 'png' ? 'image/png' : 'image/jpeg') } : a;
+      out[id] = a.file ? { id, w: a.w, h: a.h, name: a.name, addedAt: a.addedAt, src: bytesToDataUrl(await imageBytes(a), imgType(a) === 'png' ? 'image/png' : 'image/jpeg') } : a;
     } catch {
       // A missing file is skipped rather than failing the whole export.
     }

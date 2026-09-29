@@ -143,6 +143,9 @@ export interface ImageAsset {
   /** natural pixel size, for aspect ratio */
   w: number;
   h: number;
+  /** Searchable name in the image store (images with a name are kept even when unused). */
+  name?: string;
+  addedAt?: number;
 }
 
 export type UiLang = 'en' | 'hi' | 'te';
