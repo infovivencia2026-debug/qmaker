@@ -66,7 +66,7 @@ export const toHtml = (s: string) => (isHtml(s) ? s : legacyToHtml(s));
 const ALLOWED: Record<string, string[]> = {
   P: ['style'], BR: [], STRONG: [], B: [], EM: [], I: [], U: [], S: [], SUB: [], SUP: [],
   UL: [], OL: ['start'], LI: [],
-  TABLE: ['data-borderless'], TBODY: [], THEAD: [], TR: [], TD: ['colspan', 'rowspan', 'colwidth', 'style'], TH: ['colspan', 'rowspan', 'colwidth', 'style'],
+  TABLE: ['data-borderless', 'style'], TBODY: [], THEAD: [], TR: [], TD: ['colspan', 'rowspan', 'colwidth', 'style'], TH: ['colspan', 'rowspan', 'colwidth', 'style'],
   COLGROUP: [], COL: ['style'],
   IMG: ['data-id', 'data-width', 'data-align'],
   DIV: ['data-lines', 'data-box'],

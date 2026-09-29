@@ -187,25 +187,48 @@ class DocxWriter {
     const rows = [...el.querySelectorAll(':scope > tbody > tr, :scope > thead > tr, :scope > tr')];
     const cols = Math.max(1, ...rows.map((r) => [...r.children].reduce((n, c) => n + (Number(c.getAttribute('colspan')) || 1), 0)));
     const total = this.width - INDENT;
+    // Column widths dragged in the editor (px, from the first row's colwidth); else equal columns.
+    // Any row may carry a column's width (a merged header row often doesn't), so take the first found.
+    const dragged: number[] = Array(cols).fill(0);
+    for (const tr of rows) {
+      let col = 0;
+      for (const cell of [...tr.children]) {
+        const span = Number(cell.getAttribute('colspan')) || 1;
+        const w = (cell.getAttribute('colwidth') ?? '').split(',').map(Number);
+        for (let k = 0; k < span && col + k < cols; k++) if (!dragged[col + k] && w[k] > 0) dragged[col + k] = w[k];
+        col += span;
+      }
+    }
+    const known = dragged.some((x) => x > 0);
+    if (known) {
+      // Columns never dragged share what's left equally, like the editor shows them.
+      const set = dragged.filter((x) => x > 0);
+      const avg = set.reduce((a, b) => a + b, 0) / set.length;
+      for (let k = 0; k < cols; k++) if (!dragged[k]) dragged[k] = avg;
+    }
+    const scale = known ? Math.min(15, total / dragged.reduce((a, b) => a + b, 0)) : 0; // 1 px ≈ 15 twips
+    const widths = known ? dragged.map((px) => Math.round(px * scale)) : Array(cols).fill(Math.floor(total / cols));
     const colWidth = Math.floor(total / cols);
     const line = { style: BorderStyle.SINGLE, size: 4, color: '000000' };
     const borders = borderless ? NO_BORDERS : { top: line, bottom: line, left: line, right: line, insideHorizontal: line, insideVertical: line };
     return new Table({
       borders,
       indent: { size: INDENT, type: WidthType.DXA },
-      columnWidths: Array(cols).fill(colWidth),
-      width: { size: colWidth * cols, type: WidthType.DXA },
+      columnWidths: widths,
+      width: { size: widths.reduce((a, b) => a + b, 0), type: WidthType.DXA },
       rows: rows.map((tr) => new TableRow({
         tableHeader: [...tr.children].some((c) => c.tagName === 'TH'),
         children: [...tr.children].map((cell) => {
           const span = Number(cell.getAttribute('colspan')) || 1;
+          const start = [...tr.children].slice(0, [...tr.children].indexOf(cell)).reduce((n, c) => n + (Number(c.getAttribute('colspan')) || 1), 0);
+          const cellWidth = widths.slice(start, start + span).reduce((a, b) => a + b, 0) || colWidth * span;
           const isHead = cell.tagName === 'TH';
           const inner = this.toBlocks(this.chunks(cell.innerHTML || '<p></p>', isHead ? { ...opts, bold: true } : opts), 0);
           return new TableCell({
             children: inner.length ? inner : [new Paragraph({ children: [] })],
             columnSpan: span > 1 ? span : undefined,
             rowSpan: Number(cell.getAttribute('rowspan')) > 1 ? Number(cell.getAttribute('rowspan')) : undefined,
-            width: { size: colWidth * span, type: WidthType.DXA },
+            width: { size: cellWidth, type: WidthType.DXA },
             borders: borderless ? NO_BORDERS : undefined,
             shading: isHead && !borderless ? { fill: 'F2F2F2', type: 'clear', color: 'auto' } : undefined,
           });

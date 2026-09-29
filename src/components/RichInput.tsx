@@ -29,7 +29,8 @@ export const editorExtensions = (placeholder = '') => [
   Subscript,
   Superscript,
   TextAlign.configure({ types: ['paragraph'] }),
-  QTable.configure({ resizable: false }),
+  // Drag a column border to resize it (also in borderless layout grids).
+  QTable.configure({ resizable: true, cellMinWidth: 24, lastColumnResizable: true }),
   TableRow,
   TableHeader,
   TableCell,

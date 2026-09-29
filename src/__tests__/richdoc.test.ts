@@ -80,3 +80,14 @@ describe('Word export', () => {
     expect(xml.match(/<w:tbl>/g)?.length).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe('dragged sizes reach Word', () => {
+  it('uses column widths from any row, scaled to the page', async () => {
+    const a = q('short', 1, { stem: '<table><tbody><tr><th colspan="2"><p>Head</p></th></tr><tr><td colwidth="100"><p>a</p></td><td colwidth="300"><p>b</p></td></tr></tbody></table>' });
+    const bytes = await renderPaperDocx(paper([section([a.id])]), db([a]), false);
+    const xml = await (await JSZip.loadAsync(bytes)).file('word/document.xml')!.async('string');
+    const grid = [...xml.matchAll(/<w:gridCol w:w="(\d+)"\/>/g)].map((m) => Number(m[1]));
+    expect(grid).toHaveLength(2);
+    expect(grid[1] / grid[0]).toBeCloseTo(3, 1);
+  });
+});
