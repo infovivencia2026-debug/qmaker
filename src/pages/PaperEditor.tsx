@@ -1,210 +1,138 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
-import type { Paper, Question, Section, Template } from '../shared/types';
+import { useEffect, useMemo, useState } from 'react';
+import type { Paper } from '../shared/types';
 import { useStore } from '../store';
-import { lockPaper, paperQuestionIds, papersUsing, partsMarks, removeFromSection, replaceInSection, resolvePaper, sectionInstruction } from '../lib/paper';
+import { cloneBox, computeNumbers, findBox, insertBox, mapBox, marksOf, moveBox, walkBoxes, type Box } from '../lib/box';
+import { paperToBox } from '../lib/boxMigrate';
 import { PAPER_CSS, renderPaperHtml } from '../lib/renderHtml';
 import { renderPaperDocx } from '../lib/renderDocx';
 import { paperBundle } from '../lib/bundle';
-import { autoFillIds } from '../lib/autofill';
 import { safeFileName, uid } from '../lib/util';
-import { blankQuestion } from '../components/QuestionForm';
-import QuestionPicker from '../components/QuestionPicker';
-import Modal from '../components/Modal';
-import RichInput from '../components/RichInput';
-import Toolbar from '../components/rich/Toolbar';
 import { effectiveStyle, fontStack } from '../lib/fonts';
-import { paperLabels } from '../lib/labels';
-import QuestionBlock from '../components/editor/QuestionBlock';
-import Inserter from '../components/editor/Inserter';
-import { PaperPanel, QuestionPanel, SectionPanel, type Sel } from '../components/editor/Sidebar';
+import { paperLabels, PAPER_LANGS, type PaperLang } from '../lib/labels';
+import Modal from '../components/Modal';
+import Toolbar from '../components/rich/Toolbar';
+import BoxCanvas, { type CanvasOps } from '../components/boxes/BoxCanvas';
+import BoxInserter from '../components/boxes/BoxInserter';
+import BoxPanel from '../components/boxes/BoxPanel';
+import StyleEditor from '../components/StyleEditor';
 
-const move = <T,>(arr: T[], i: number, d: number) => {
-  const j = i + d;
-  if (j < 0 || j >= arr.length) return arr;
-  const next = [...arr];
-  [next[i], next[j]] = [next[j], next[i]];
-  return next;
-};
+type Dist = { label: string; marks: number }[];
 
-type InsertAt = { sectionId: string; index: number };
+/** Marks per chapter / difficulty: each fixed-marks box counts under the nearest chapter/difficulty set on it or above it. */
+function distribution(root: Box) {
+  const chapter = new Map<string, number>();
+  const difficulty = new Map<string, number>();
+  const walk = (b: Box, ch?: string, df?: string) => {
+    const c = b.meta?.chapter || ch;
+    const d = b.meta?.difficulty || df;
+    if (b.marks?.mode === 'fixed') {
+      chapter.set(c || '—', (chapter.get(c || '—') ?? 0) + (b.marks.value ?? 0));
+      difficulty.set(d || '—', (difficulty.get(d || '—') ?? 0) + (b.marks.value ?? 0));
+      return; // parts inside a fixed-marks box belong to it
+    }
+    b.children?.forEach((k) => walk(k, c, d));
+  };
+  walk(root);
+  const rows = (m: Map<string, number>): Dist => [...m].map(([label, marks]) => ({ label, marks })).sort((a, b) => b.marks - a.marks);
+  return { chapter: rows(chapter), difficulty: rows(difficulty) };
+}
+
+function Bars({ title, rows }: { title: string; rows: Dist }) {
+  const total = rows.reduce((s, r) => s + r.marks, 0);
+  if (!rows.length) return null;
+  return (
+    <div className="panel">
+      <div className="panel-h">{title}</div>
+      {rows.map((r) => (
+        <div className="bar" key={r.label}>
+          <div className="bar-l"><span className="clip">{r.label}</span><span>{r.marks} <span className="muted">({total ? Math.round((r.marks / total) * 100) : 0}%)</span></span></div>
+          <div className="bar-t"><div style={{ width: `${total ? (r.marks / total) * 100 : 0}%` }} /></div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function PaperEditor({ id, onBack }: { id: string; onBack: () => void }) {
   const { db, update, t, notify, undo, redo, canUndo, canRedo } = useStore();
   const paper = db.papers.find((p) => p.id === id)!;
-  const [sel, setSel] = useState<Sel>({ kind: 'paper' });
-  const [tab, setTab] = useState<'paper' | 'block'>('paper');
-  const [inserter, setInserter] = useState<InsertAt | null>(null);
-  const [picker, setPicker] = useState<InsertAt | null>(null);
-  const [altPicker, setAltPicker] = useState<{ sectionId: string; primaryId: string } | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [tab, setTab] = useState<'paper' | 'box'>('paper');
+  const [inserter, setInserter] = useState<{ parentId: string; index: number } | null>(null);
   const [preview, setPreview] = useState<'paper' | 'key' | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [sidebar, setSidebar] = useState(true);
   const [busy, setBusy] = useState(false);
 
-  const resolved = resolvePaper(paper, db);
-  const style = effectiveStyle(db.settings.paperStyle, paper.style);
-  const L = paperLabels(paper.labelLang);
-  const sheetStyle = {
-    fontFamily: fontStack(style), '--fs': `${style.fontSize}pt`, '--lh': style.lineHeight, '--gap': `${style.questionGap}pt`,
-  } as React.CSSProperties;
-  const target = paper.maxMarks ?? 0;
-  const inPaper = useMemo(() => new Set(paperQuestionIds(paper)), [paper]);
+  // Older papers (sections and questions) become a Box tree the first time they are opened.
+  useEffect(() => {
+    if (!paper.body) update((db) => ({ ...db, papers: db.papers.map((p) => (p.id === id && !p.body ? { ...p, body: paperToBox(p, db) } : p)) }));
+  }, [id, paper.body, update]);
 
-  const select = (s: Sel) => {
-    setSel(s);
-    setTab(s.kind === 'paper' ? 'paper' : 'block');
-  };
+  const body = paper.body;
+  const labels = useMemo(() => (body ? computeNumbers(body) : new Map<string, string>()), [body]);
 
-  // ---------- mutations ----------
   const touch = (p: Paper): Paper => ({ ...p, updatedAt: Date.now() });
   const setPaper = (patch: Partial<Paper>) => update((db) => ({ ...db, papers: db.papers.map((p) => (p.id === id ? touch({ ...p, ...patch }) : p)) }));
-  const setSections = (fn: (s: Section[]) => Section[]) =>
-    update((db) => ({ ...db, papers: db.papers.map((p) => (p.id === id ? touch({ ...p, sections: fn(p.sections) }) : p)) }));
-  const setSection = (sid: string, patch: Partial<Section>) => setSections((ss) => ss.map((s) => (s.id === sid ? { ...s, ...patch } : s)));
-  const setQuestion = (qid: string, patch: Partial<Question>) =>
-    update((db) => ({
-      ...db,
-      questions: db.questions.map((q) => {
-        if (q.id !== qid) return q;
-        const next = { ...q, ...patch, updatedAt: Date.now() };
-        // Questions with parts are worth the sum of their parts.
-        const t = db.templates.find((x) => x.id === next.templateId);
-        const sum = t && partsMarks(t, next.data);
-        return sum != null ? { ...next, marks: sum } : next;
-      }),
-    }));
-
-  const insertQuestions = (at: InsertAt, qs: Question[], existingIds: string[] = []) => {
-    const ids = [...qs.map((q) => q.id), ...existingIds];
-    update((db) => ({
-      ...db,
-      questions: [...db.questions, ...qs],
-      papers: db.papers.map((p) =>
-        p.id !== id ? p : touch({
-          ...p,
-          sections: p.sections.map((s) => (s.id !== at.sectionId ? s : { ...s, questionIds: [...s.questionIds.slice(0, at.index), ...ids, ...s.questionIds.slice(at.index)] })),
-        }),
-      ),
-    }));
-    if (ids.length === 1) select({ kind: 'question', sectionId: at.sectionId, id: ids[0] });
+  const setBody = (fn: (b: Box) => Box) => update((db) => ({ ...db, papers: db.papers.map((p) => (p.id === id && p.body ? touch({ ...p, body: fn(p.body) }) : p)) }));
+  const select = (bid: string | null) => {
+    setSelected(bid);
+    setTab(bid ? 'box' : 'paper');
+  };
+  const remove = (bid: string) => {
+    setBody((r) => mapBox(r, bid, () => null));
+    if (selected === bid) select(null);
   };
 
-  const lastChapter = () => {
-    const all = resolved.sections.flatMap((s) => s.questions);
-    return all[all.length - 1]?.question.chapter ?? '';
-  };
-
-  const createBlock = (tpl: Template, at: InsertAt) => {
-    const section = paper.sections.find((s) => s.id === at.sectionId)!;
-    const q = blankQuestion(tpl, paper.subject, lastChapter());
-    if (section.marksEach) q.marks = section.marksEach;
-    insertQuestions(at, [q]);
-    setInserter(null);
-  };
-
-  const duplicate = (sectionId: string, qid: string) => {
-    const src = db.questions.find((q) => q.id === qid);
-    const s = paper.sections.find((x) => x.id === sectionId);
-    if (!src || !s) return;
-    insertQuestions({ sectionId, index: s.questionIds.indexOf(qid) + 1 }, [{ ...structuredClone(src), id: uid(), createdAt: Date.now(), updatedAt: Date.now() }]);
-  };
-
-  const removeFromPaper = (sectionId: string, qid: string) => {
-    setSections((ss) => ss.map((s) => (s.id === sectionId ? removeFromSection(s, qid) : s)));
-    select({ kind: 'paper' });
-  };
-
-  // A question used by other papers can be split off so edits here stay in this paper.
-  const makePrivateCopy = (sectionId: string, qid: string) => {
-    const src = db.questions.find((q) => q.id === qid);
-    if (!src) return;
-    const copy = { ...structuredClone(src), id: uid(), createdAt: Date.now(), updatedAt: Date.now() };
-    update((db) => ({
-      ...db,
-      questions: [...db.questions, copy],
-      papers: db.papers.map((p) => (p.id !== id ? p : touch({ ...p, sections: p.sections.map((s) => (s.id === sectionId ? replaceInSection(s, qid, copy.id) : s)) }))),
-    }));
-    select({ kind: 'question', sectionId, id: copy.id });
-    notify('This paper now has its own copy. Other papers are unchanged.');
-  };
-
-  const toggleLock = () => {
-    if (!paper.locked) {
-      setPaper(lockPaper(paper, db));
-      notify('Paper locked. It will print exactly like this even if questions change in the bank.');
-      select({ kind: 'paper' });
-      return;
-    }
-    const frozen = new Map(paper.locked.questions.map((q) => [q.id, q.updatedAt]));
-    const changed = db.questions.filter((q) => frozen.has(q.id) && q.updatedAt !== frozen.get(q.id)).length;
-    const missing = [...frozen.keys()].filter((qid) => !db.questions.some((q) => q.id === qid)).length;
-    const note = changed || missing
-      ? `\n\n${changed ? `${changed} question(s) were edited in the bank since you locked it — the paper will show the new versions.` : ''}${missing ? `\n${missing} question(s) were deleted from the bank and will disappear from the paper.` : ''}`
-      : '';
-    if (!confirm(`Unlock this paper for editing?${note}`)) return;
-    setPaper({ locked: undefined });
-  };
-
-  // ---------- either / or ----------
-  const setAlternative = (sectionId: string, primaryId: string, altId: string | null, newQ?: Question) => {
-    update((db) => ({
-      ...db,
-      questions: newQ ? [...db.questions, newQ] : db.questions,
-      papers: db.papers.map((p) =>
-        p.id !== id ? p : touch({
-          ...p,
-          sections: p.sections.map((s) => {
-            if (s.id !== sectionId) return s;
-            const alternatives = { ...s.alternatives };
-            if (altId) alternatives[primaryId] = altId;
-            else delete alternatives[primaryId];
-            return { ...s, alternatives };
-          }),
-        }),
-      ),
-    }));
-    select(altId ? { kind: 'question', sectionId, id: altId } : { kind: 'question', sectionId, id: primaryId });
-  };
-  const addAltNew = (sectionId: string, primaryId: string) => {
-    const primary = db.questions.find((q) => q.id === primaryId);
-    const tpl = primary && db.templates.find((t) => t.id === primary.templateId);
-    if (!primary || !tpl) return;
-    const q = blankQuestion(tpl, primary.subject, primary.chapter);
-    q.marks = primary.marks;
-    setAlternative(sectionId, primaryId, q.id, q);
-  };
-  const swapAlt = (sectionId: string, primaryId: string) => {
-    const s = paper.sections.find((x) => x.id === sectionId);
-    const altId = s?.alternatives?.[primaryId];
-    if (!s || !altId) return;
-    const alternatives = { ...s.alternatives };
-    delete alternatives[primaryId];
-    alternatives[altId] = primaryId;
-    setSection(sectionId, { questionIds: s.questionIds.map((x) => (x === primaryId ? altId : x)), alternatives });
-  };
-
-  const addSection = () => {
-    const s: Section = { id: uid(), title: `Section ${String.fromCharCode(65 + paper.sections.length)}`, instruction: '', questionIds: [] };
-    setSections((ss) => [...ss, s]);
-    select({ kind: 'section', id: s.id });
-  };
-
-  const autoFill = (sectionId: string) => {
-    const { ids, need } = autoFillIds(paper, db, sectionId);
-    if (!ids.length) return notify('No unused questions in the bank match this section (same subject and type).');
-    const s = paper.sections.find((x) => x.id === sectionId)!;
-    insertQuestions({ sectionId, index: s.questionIds.length }, [], ids);
-    notify(ids.length < need ? `Added ${ids.length} — the bank only had ${ids.length} matching questions (needed ${need}).` : `Added ${ids.length} questions.`);
-  };
-
-  // Escape deselects, like the block editor.
+  // Delete removes the selected box when the cursor is not in a text box; Escape deselects.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') select({ kind: 'paper' });
+      if (e.key === 'Escape') select(null);
+      const typing = (e.target as HTMLElement | null)?.closest?.('.ProseMirror, input, textarea, select');
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selected && !typing) {
+        e.preventDefault();
+        remove(selected);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  });
+
+  if (!body) return null;
+
+  const L = paperLabels(paper.labelLang);
+  const total = marksOf(body);
+  const target = paper.maxMarks ?? 0;
+  const style = effectiveStyle(db.settings.paperStyle, paper.style);
+  const sheetStyle = { fontFamily: fontStack(style), '--fs': `${style.fontSize}pt`, '--lh': style.lineHeight, '--gap': `${style.questionGap}pt` } as React.CSSProperties;
+
+  const ops: CanvasOps = {
+    root: body,
+    selected,
+    select,
+    update: (bid, patch) => setBody((r) => mapBox(r, bid, (b) => ({ ...b, ...patch }))),
+    remove,
+    move: (bid, parentId, index) => setBody((r) => moveBox(r, bid, parentId, index)),
+    duplicate: (bid) => {
+      const f = findBox(body, bid);
+      if (!f?.parent) return;
+      const copy = cloneBox(f.box, uid);
+      setBody((r) => insertBox(r, f.parent!.id, copy, f.index + 1));
+      select(copy.id);
+    },
+    saveToLibrary: (bid) => {
+      const f = findBox(body, bid);
+      if (!f) return;
+      const saved: Box = { ...cloneBox(f.box, uid), updatedAt: Date.now(), meta: { subject: paper.subject || undefined, ...f.box.meta } };
+      update((db) => ({ ...db, library: [...db.library, saved] }));
+      notify(`Saved "${saved.name || 'box'}" to your library.`);
+    },
+    openInserter: (parentId, index) => setInserter({ parentId, index }),
+    labels,
+    marksWord: L('marks'),
+    orWord: L('or'),
+    bilingual: !!paper.bilingual,
+  };
 
   // ---------- export ----------
   const baseName = safeFileName([paper.examName || 'Paper', paper.className, paper.subject].filter(Boolean).join(' - '));
@@ -228,49 +156,11 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
     [`💬 ${t('sharePaper')} (WhatsApp)`, () => run(async () => window.qmaker.saveFile(new TextEncoder().encode(JSON.stringify(await paperBundle(db, paper))), `${baseName}.qpaper`, 'QMaker Paper', 'qpaper'))],
   ];
 
-  // ---------- sidebar ----------
-  const selSection = sel.kind !== 'paper' ? paper.sections.find((s) => s.id === (sel.kind === 'section' ? sel.id : sel.sectionId)) : undefined;
-  const selRq = sel.kind === 'question' ? resolved.sections.flatMap((s) => s.questions).find((q) => q.question.id === sel.id || q.alt?.question.id === sel.id) : undefined;
-  const selIsAlt = !!selRq && sel.kind === 'question' && selRq.alt?.question.id === sel.id;
-  let blockPanel = <p className="muted pad">Select a section or question on the paper to edit its settings.</p>;
-  if (sel.kind === 'section' && selSection) {
-    const idx = paper.sections.indexOf(selSection);
-    blockPanel = (
-      <SectionPanel
-        paper={paper}
-        section={selSection}
-        setSection={(p) => setSection(selSection.id, p)}
-        onAutoFill={() => autoFill(selSection.id)}
-        onMove={(d) => setSections((ss) => move(ss, idx, d))}
-        onDelete={() => {
-          if (selSection.questionIds.length && !confirm(t('confirmDelete'))) return;
-          setSections((ss) => ss.filter((s) => s.id !== selSection.id));
-          select({ kind: 'paper' });
-        }}
-      />
-    );
-  } else if (sel.kind === 'question' && selRq && selSection) {
-    const primaryId = selRq.question.id;
-    const selId = selIsAlt ? selRq.alt!.question.id : primaryId;
-    blockPanel = (
-      <QuestionPanel
-        rq={selRq}
-        isAlt={selIsAlt}
-        sharedWith={papersUsing(db, selId, paper.id)}
-        onMakeCopy={() => makePrivateCopy(selSection.id, selId)}
-        section={selSection}
-        onChange={(p) => setQuestion(selIsAlt ? selRq.alt!.question.id : primaryId, p)}
-        onDuplicate={() => duplicate(selSection.id, primaryId)}
-        onRemove={() => (selIsAlt ? setAlternative(selSection.id, primaryId, null) : removeFromPaper(selSection.id, primaryId))}
-        onAddAltNew={() => addAltNew(selSection.id, primaryId)}
-        onAddAltBank={() => setAltPicker({ sectionId: selSection.id, primaryId })}
-        onRemoveAlt={() => setAlternative(selSection.id, primaryId, null)}
-        onSwapAlt={() => swapAlt(selSection.id, primaryId)}
-      />
-    );
-  }
-
-  const marksStatus = !target ? '' : resolved.totalMarks === target ? 'ok' : resolved.totalMarks > target ? 'over' : 'under';
+  const selBox = selected ? findBox(body, selected)?.box : undefined;
+  const dist = distribution(body);
+  let count = 0;
+  walkBoxes(body, (b) => { if (b.number?.scope === 'paper') count++; });
+  const marksStatus = !target ? '' : total === target ? 'ok' : total > target ? 'over' : 'under';
 
   return (
     <div className="wp">
@@ -282,133 +172,55 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
           <button className="icon" disabled={!canRedo} title="Redo (Ctrl+Y)" onClick={redo}>↷</button>
         </div>
         <div className="wp-top-r">
-          <button className={`marks-pill ${marksStatus}`} onClick={() => { select({ kind: 'paper' }); setSidebar(true); }} title="Marks distribution">
-            {resolved.totalMarks}{target > 0 && ` / ${target}`} {t('marksWord')}
-          </button>
+          <button className={`marks-pill ${marksStatus}`} onClick={() => { select(null); setSidebar(true); }}>{total}{target > 0 && ` / ${target}`} {t('marksWord')}</button>
           <span className="saved">✓ {t('saved')}</span>
-          <button className={paper.locked ? 'locked-btn' : ''} onClick={toggleLock} title={paper.locked ? 'Unlock to edit' : 'Freeze this paper as final'}>
+          <button className={paper.locked ? 'locked-btn' : ''} onClick={() => setPaper(paper.locked ? { locked: undefined } : { locked: { at: Date.now(), questions: [], templates: [] } })}>
             {paper.locked ? `🔒 ${t('locked')}` : `🔓 ${t('lock')}`}
           </button>
           <button onClick={() => setPreview('paper')}>{t('preview')}</button>
           <div className="dd">
             <button className="primary" disabled={busy} onClick={() => setExportOpen((o) => !o)}>{busy ? '…' : `${t('export')} ▾`}</button>
-            {exportOpen && (
-              <div className="dd-menu" onMouseLeave={() => setExportOpen(false)}>
-                {exports.map(([label, fn]) => <button key={label} onClick={fn}>{label}</button>)}
-              </div>
-            )}
+            {exportOpen && <div className="dd-menu" onMouseLeave={() => setExportOpen(false)}>{exports.map(([label, fn]) => <button key={label} onClick={fn}>{label}</button>)}</div>}
           </div>
-          <button className={`icon ${sidebar ? 'on' : ''}`} title="Settings" onClick={() => setSidebar((s) => !s)}>⚙</button>
+          <button className={`icon ${sidebar ? 'on' : ''}`} onClick={() => setSidebar((s) => !s)}>⚙</button>
         </div>
       </header>
-
       {!paper.locked && <Toolbar />}
-      <div className="wp-body">
-        <div className="wp-canvas" onMouseDown={() => select({ kind: 'paper' })}>
-          <style>{PAPER_CSS}</style>
-          {paper.locked && (
-            <div className="locked-banner">
-              🔒 Locked on {new Date(paper.locked.at).toLocaleString()} — this is the final version. It won't change even if its questions are edited in the bank.
-              <button onClick={toggleLock}>{t('unlockToEdit')}</button>
-            </div>
-          )}
-          {paper.locked ? (
-            <div className="sheet" dangerouslySetInnerHTML={{ __html: renderPaperHtml(paper, db, false) }} />
-          ) : (
-          <div className="sheet qp edit" style={sheetStyle}>
-            <div className="hd">
-              <div className="hd-top">
-                {db.settings.logo && <img src={db.settings.logo} />}
-                <div>
-                  <div className="inst">{db.settings.institutionName || <span className="ph">Institution name — set it in Settings</span>}</div>
-                  {db.settings.address && <div className="addr">{db.settings.address}</div>}
-                </div>
-              </div>
-              <input className="ib exam" value={paper.examName} placeholder="Exam name, e.g. Half Yearly Examination 2026-27" onChange={(e) => setPaper({ examName: e.target.value })} />
-            </div>
-            <div className="meta">
-              <span>{L('class')}: <input className="ib inl" value={paper.className} placeholder="VIII" onChange={(e) => setPaper({ className: e.target.value })} /></span>
-              <span>{L('subject')}: <input className="ib inl" list="ed-subjects" value={paper.subject} placeholder="Science" onChange={(e) => setPaper({ subject: e.target.value })} /></span>
-            </div>
-            <datalist id="ed-subjects">{[...new Set(db.questions.map((q) => q.subject))].map((s) => <option key={s} value={s} />)}</datalist>
-            <div className="meta">
-              <span>{L('time')}: <input className="ib inl" value={paper.duration} onChange={(e) => setPaper({ duration: e.target.value })} /></span>
-              <span>{L('date')}: <input className="ib inl" value={paper.date} placeholder="dd-mm-yyyy" onChange={(e) => setPaper({ date: e.target.value })} /></span>
-              <span>{L('maxMarks')}: {resolved.totalMarks}</span>
-            </div>
-            <div className="gi">
-              <div className="gi-title">{L('instructions')}:</div>
-              <RichInput value={paper.instructions} placeholder="Instructions (optional)" onChange={(v) => setPaper({ instructions: v })} />
-            </div>
 
-            <div className={paper.pageCols === 2 ? 'cols2' : ''}>
-            {resolved.sections.map((rs) => {
-              const section = paper.sections.find((s) => s.id === rs.id)!;
-              const isSel = sel.kind === 'section' && sel.id === rs.id;
-              const planned = rs.plannedCount > 0;
-              return (
-                <div className="sec" key={rs.id}>
-                  <div className={`blk sec-blk ${isSel ? 'sel' : ''}`} onMouseDown={(e) => { e.stopPropagation(); select({ kind: 'section', id: rs.id }); }}>
-                    <div className="sec-h">
-                      <input className="ib strong" value={section.title} placeholder="Section title" onChange={(e) => setSection(rs.id, { title: e.target.value })} />
-                      <span>{rs.marksLabel}</span>
-                    </div>
-                    <RichInput className="sec-i" value={section.instruction} placeholder={sectionInstruction(rs) || 'Section instruction (optional)'} onChange={(v) => setSection(rs.id, { instruction: v })} />
-                    {(planned || isSel) && (
-                      <div className={`plan-chip ${planned && rs.questions.length === rs.plannedCount ? 'ok' : ''}`}>
-                        {planned
-                          ? <>Plan: {rs.questions.length} / {rs.plannedCount} questions{rs.plannedMarks !== null && <> · {rs.marks} / {rs.plannedMarks} marks</>}</>
-                          : 'No marks plan — set one in the sidebar →'}
-                      </div>
-                    )}
+      <div className="wp-body">
+        <div className="wp-canvas" onMouseDown={() => select(null)}>
+          <style>{PAPER_CSS}</style>
+          {paper.locked ? (
+            <>
+              <div className="locked-banner">🔒 {t('locked')} <button onClick={() => setPaper({ locked: undefined })}>{t('unlockToEdit')}</button></div>
+              <div className="sheet" dangerouslySetInnerHTML={{ __html: renderPaperHtml(paper, db, false) }} />
+            </>
+          ) : (
+            <div className="sheet qp edit" style={sheetStyle}>
+              <div className="hd">
+                <div className="hd-top">
+                  {db.settings.logo && <img src={db.settings.logo} />}
+                  <div>
+                    <div className="inst">{db.settings.institutionName || <span className="ph">Institution name — set it in Settings</span>}</div>
+                    {db.settings.address && <div className="addr">{db.settings.address}</div>}
                   </div>
-                  {rs.questions.map((rq, i) => (
-                    <Fragment key={rq.question.id}>
-                      <div className="between"><button onMouseDown={(e) => e.stopPropagation()} onClick={() => setInserter({ sectionId: rs.id, index: i })}>+</button></div>
-                      <QuestionBlock
-                        rq={rq}
-                        sharedCount={papersUsing(db, rq.question.id, paper.id).length}
-                        answerSpace={paper.answerSpace}
-                        bilingual={!!paper.bilingual}
-                        pageCols={paper.pageCols}
-                        selected={sel.kind === 'question' && sel.id === rq.question.id}
-                        onSelect={() => select({ kind: 'question', sectionId: rs.id, id: rq.question.id })}
-                        onData={(data) => setQuestion(rq.question.id, { data })}
-                        onLayout={(layout) => setQuestion(rq.question.id, { layout })}
-                        onMove={(d) => setSection(rs.id, { questionIds: move(section.questionIds, section.questionIds.indexOf(rq.question.id), d) })}
-                        onDuplicate={() => duplicate(rs.id, rq.question.id)}
-                        onRemove={() => removeFromPaper(rs.id, rq.question.id)}
-                      />
-                      {rq.alt && (
-                        <>
-                          <div className="or-div"><span>{L('or')}</span></div>
-                          <QuestionBlock
-                            rq={rq}
-                            which="alt"
-                            answerSpace={paper.answerSpace}
-                            bilingual={!!paper.bilingual}
-                            pageCols={paper.pageCols}
-                            selected={sel.kind === 'question' && sel.id === rq.alt.question.id}
-                            onSelect={() => select({ kind: 'question', sectionId: rs.id, id: rq.alt!.question.id })}
-                            onData={(data) => setQuestion(rq.alt!.question.id, { data })}
-                            onLayout={(layout) => setQuestion(rq.alt!.question.id, { layout })}
-                            onRemove={() => setAlternative(rs.id, rq.question.id, null)}
-                          />
-                        </>
-                      )}
-                    </Fragment>
-                  ))}
-                  <button className="appender" onMouseDown={(e) => e.stopPropagation()} onClick={() => setInserter({ sectionId: rs.id, index: section.questionIds.length })}>
-                    <span>+</span> {t('addQuestion')} · {section.title || t('section')}
-                    {planned && rs.questions.length < rs.plannedCount && <em> — {rs.plannedCount - rs.questions.length} {t('morePlanned')}</em>}
-                  </button>
                 </div>
-              );
-            })}
+                <input className="ib exam" value={paper.examName} placeholder="Exam name" onChange={(e) => setPaper({ examName: e.target.value })} />
+              </div>
+              <div className="meta">
+                <span>{L('class')}: <input className="ib inl" value={paper.className} placeholder="VIII" onChange={(e) => setPaper({ className: e.target.value })} /></span>
+                <span>{L('subject')}: <input className="ib inl" value={paper.subject} placeholder="Science" onChange={(e) => setPaper({ subject: e.target.value })} /></span>
+              </div>
+              <div className="meta">
+                <span>{L('time')}: <input className="ib inl" value={paper.duration} onChange={(e) => setPaper({ duration: e.target.value })} /></span>
+                <span>{L('date')}: <input className="ib inl" value={paper.date} placeholder="dd-mm-yyyy" onChange={(e) => setPaper({ date: e.target.value })} /></span>
+                <span>{L('maxMarks')}: {total}</span>
+              </div>
+              <div className={paper.pageCols === 2 ? 'cols2' : ''}>
+                <BoxCanvas ops={ops} />
+              </div>
+              <div className="end">{L('end')}</div>
             </div>
-            <button className="appender sec-app" onMouseDown={(e) => e.stopPropagation()} onClick={addSection}><span>+</span> {t('addSection')}</button>
-            <div className="end">{L('end')}</div>
-          </div>
           )}
         </div>
 
@@ -416,39 +228,51 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
           <aside className="wp-side">
             <div className="wp-tabs">
               <button className={tab === 'paper' ? 'on' : ''} onClick={() => setTab('paper')}>{t('paper')}</button>
-              <button className={tab === 'block' ? 'on' : ''} onClick={() => setTab('block')}>{sel.kind === 'section' ? t('section') : sel.kind === 'question' ? t('question') : '—'}</button>
+              <button className={tab === 'box' ? 'on' : ''} onClick={() => setTab('box')}>{selBox?.name || 'Box'}</button>
             </div>
             <div className="wp-side-b">
-              {tab === 'paper' ? <PaperPanel paper={paper} setPaper={setPaper} onSelectSection={(sid) => select({ kind: 'section', id: sid })} /> : blockPanel}
+              {tab === 'box' ? (
+                selBox ? <BoxPanel key={selBox.id} b={selBox} update={(patch) => ops.update(selBox.id, patch)} /> : <p className="muted pad">Click any box on the paper to see its switches.</p>
+              ) : (
+                <>
+                  <div className="panel">
+                    <div className="panel-h">{t('marks')}</div>
+                    <div className={`big-marks ${marksStatus}`}><b>{total}</b>{target > 0 && <> / {target}</>} <span>{t('marksWord')}</span></div>
+                    {marksStatus === 'under' && <div className="msg under">{target - total} marks still to add</div>}
+                    {marksStatus === 'over' && <div className="msg over">{total - target} marks over the maximum</div>}
+                    <label>{t('maxTarget')}<input type="number" min={0} value={target || ''} placeholder="e.g. 80" onChange={(e) => setPaper({ maxMarks: Number(e.target.value) || 0 })} /></label>
+                    <div className="muted">{count} numbered questions.</div>
+                  </div>
+                  <Bars title={t('byChapter')} rows={dist.chapter} />
+                  <Bars title={t('byDifficulty')} rows={dist.difficulty} />
+                  <details className="panel" open>
+                    <summary className="panel-h">{t('fontSpacing')}</summary>
+                    <StyleEditor value={style} onChange={(patch) => setPaper({ style: { ...paper.style, ...patch } })} />
+                  </details>
+                  <div className="panel">
+                    <div className="panel-h">{t('languageH')}</div>
+                    <label>Printed words<select value={paper.labelLang ?? 'en'} onChange={(e) => setPaper({ labelLang: e.target.value as PaperLang })}>{PAPER_LANGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
+                    <label className="check"><input type="checkbox" checked={!!paper.bilingual} onChange={(e) => setPaper({ bilingual: e.target.checked })} /> Bilingual (second-language text under each box)</label>
+                  </div>
+                  <div className="panel">
+                    <div className="panel-h">{t('printing')}</div>
+                    <label className="check"><input type="checkbox" checked={paper.pageCols === 2} onChange={(e) => setPaper({ pageCols: e.target.checked ? 2 : undefined })} /> Two page columns</label>
+                  </div>
+                </>
+              )}
             </div>
           </aside>
         )}
       </div>
 
       {inserter && (
-        <Inserter
-          suggested={paper.sections.find((s) => s.id === inserter.sectionId)?.templateId}
-          onPick={(tpl) => createBlock(tpl, inserter)}
-          onBank={() => { setPicker(inserter); setInserter(null); }}
+        <BoxInserter
           onClose={() => setInserter(null)}
-        />
-      )}
-      {picker && (
-        <QuestionPicker
-          subject={paper.subject}
-          templateId={paper.sections.find((s) => s.id === picker.sectionId)?.templateId}
-          exclude={inPaper}
-          onClose={() => setPicker(null)}
-          onAdd={(ids) => { insertQuestions(picker, [], ids); setPicker(null); }}
-        />
-      )}
-      {altPicker && (
-        <QuestionPicker
-          subject={paper.subject}
-          templateId={db.questions.find((q) => q.id === altPicker.primaryId)?.templateId}
-          exclude={inPaper}
-          onClose={() => setAltPicker(null)}
-          onAdd={(ids) => { setAlternative(altPicker.sectionId, altPicker.primaryId, ids[0]); setAltPicker(null); }}
+          onPick={(b) => {
+            setBody((r) => insertBox(r, inserter.parentId, b, inserter.index));
+            setInserter(null);
+            select(b.id);
+          }}
         />
       )}
       {preview && (

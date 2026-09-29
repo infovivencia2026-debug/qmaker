@@ -21,6 +21,6 @@ export const paper = (sections: Section[], extra: Partial<Paper> = {}): Paper =>
 });
 
 export const db = (questions: Question[], papers: Paper[] = []): DB => ({
-  version: 1, images: {}, templates: BUILTIN_TEMPLATES, questions, papers,
+  version: 1, images: {}, templates: BUILTIN_TEMPLATES, questions, papers, library: [],
   settings: { institutionName: '', address: '', logo: '', uiLang: 'en', paperStyle: DEFAULT_STYLE },
 });

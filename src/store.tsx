@@ -3,6 +3,7 @@ import type { DB, ImageAsset } from './shared/types';
 import { DEFAULT_STYLE } from './lib/fonts';
 import { collectImageIds, imageFromBlob } from './lib/rich';
 import { storeImages } from './lib/images';
+import { questionToBox } from './lib/boxMigrate';
 import { BUILTIN_TEMPLATES } from './shared/templates';
 import { translate } from './i18n';
 
@@ -11,16 +12,20 @@ export function normalize(raw: unknown): DB {
   const questions = db.questions ?? [];
   const papers = db.papers ?? [];
   // Drop images nothing refers to any more (deleted questions, removed from text).
-  const used = collectImageIds([questions, papers]);
+  const templates = [...BUILTIN_TEMPLATES, ...(db.templates ?? []).filter((t) => !t.builtin)];
+  // First run after the Box update: the old question bank becomes the library.
+  const library = db.library ?? questions.flatMap((q) => questionToBox(q, { templates, questions, papers, images: {}, library: [] } as unknown as DB) ?? []);
+  const used = collectImageIds([questions, papers, library]);
   const images = Object.fromEntries(Object.entries(db.images ?? {}).filter(([id]) => used.has(id)));
   return {
     version: 1,
     settings: { institutionName: '', address: '', logo: '', uiLang: 'en', ...db.settings, paperStyle: { ...DEFAULT_STYLE, ...db.settings?.paperStyle } },
     // Built-ins always come from the app itself so updates reach existing installs.
-    templates: [...BUILTIN_TEMPLATES, ...(db.templates ?? []).filter((t) => !t.builtin)],
+    templates,
     questions,
     papers,
     images,
+    library,
   };
 }
 

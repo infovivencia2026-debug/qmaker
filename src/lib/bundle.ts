@@ -20,10 +20,12 @@ export async function storeBundleImages(b: Bundle): Promise<Bundle> {
 }
 
 /** Question bank, optionally one subject. Includes custom templates too so the receiver can open everything. */
+/** The library (optionally one subject) as a shareable file. */
 export async function bankBundle(db: DB, subject: string | null) {
-  const questions = subject === null ? db.questions : db.questions.filter((q) => q.subject === subject);
-  const templates = subject === null ? db.templates.filter((t) => !t.builtin) : customTemplatesFor(db, questions);
-  return bundle(db, 'bank', templates, questions, []);
+  const library = subject === null ? db.library : db.library.filter((b) => b.meta?.subject === subject);
+  const b = await bundle(db, 'bank', [], [], []);
+  const ids = collectImageIds(library);
+  return { ...b, library, images: { ...b.images, ...(await embedImages(Object.fromEntries([...ids].filter((id) => db.images[id]).map((id) => [id, db.images[id]])))) } };
 }
 
 export async function paperBundle(db: DB, paper: Paper) {
@@ -73,6 +75,7 @@ export function mergeBundle(db: DB, b: Bundle) {
     papers: mergeList(db.papers, b.papers, { added: 0, updated: 0, skipped: 0 }),
     // Image ids are random UUIDs, so an id always means the same picture.
     images: { ...(b.images ?? {}), ...db.images },
+    library: mergeList(db.library.map((x) => ({ ...x, updatedAt: x.updatedAt ?? 0 })), (b.library ?? []).map((x) => ({ ...x, updatedAt: x.updatedAt ?? 0 })), stats),
   };
   return { db: next, stats, papers: b.papers.length };
 }

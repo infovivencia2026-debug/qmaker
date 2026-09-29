@@ -83,6 +83,8 @@ export interface Box {
   meta?: BoxMeta;
   /** Name when saved in the library or used as a preset. */
   name?: string;
+  /** Library items: last edit time (sharing keeps the newer copy). */
+  updatedAt?: number;
 }
 
 // ---------- numbering ----------

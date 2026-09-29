@@ -144,3 +144,19 @@ export function paperToBox(paper: Paper, liveDb: DB): Box {
   }
   return root;
 }
+
+/** One older bank question → a library box (numbered question with its content and answers). */
+export function questionToBox(q: Question, db: DB): Box | null {
+  const t = db.templates.find((x) => x.id === q.templateId);
+  if (!t) return null;
+  const blank: Paper = { id: 'lib', examName: '', subject: '', className: '', duration: '', date: '', instructions: '', answerSpace: true, sections: [], createdAt: 0, updatedAt: 0 };
+  return {
+    id: `lib~${q.id}`,
+    name: t.name,
+    updatedAt: q.updatedAt,
+    meta: { subject: q.subject, chapter: q.chapter, difficulty: q.difficulty },
+    number: { format: '1', pattern: '{n}.', scope: 'paper', counter: 'q' },
+    marks: { mode: 'fixed', value: q.marks, show: true, pattern: '[{m}]' },
+    children: fieldsToBoxes(q, t, db, blank, undefined),
+  };
+}

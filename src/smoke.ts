@@ -46,6 +46,7 @@ export async function run() {
     version: 1, images: { [img.id]: img }, templates: BUILTIN_TEMPLATES, questions,
     settings: { institutionName: 'श्री विद्या निकेतन / శ్రీ విద్యా నికేతన్', address: 'Smoke test', logo: '', uiLang: 'en', paperStyle: DEFAULT_STYLE },
     papers: [],
+    library: [],
   };
   const paper = {
     id: 'smoke-paper', examName: 'QMaker smoke test', subject: 'Science', className: 'X', duration: '1 Hour', date: '', instructions: 'All questions are compulsory.',

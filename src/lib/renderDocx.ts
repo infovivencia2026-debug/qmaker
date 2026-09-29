@@ -11,6 +11,8 @@ import { richBody, richHasImage } from './richdoc';
 import { imageBytes, imgType } from './images';
 import { effectiveStyle, wordLatinFont } from './fonts';
 import { paperLabels, type LabelKey } from './labels';
+import { computeNumbers, marksLabel, marksOf, printOrder, shownIn, type Box } from './box';
+import { paperToBox } from './boxMigrate';
 import { answerLabel } from './labels';
 
 const CONTENT_WIDTH = 9906; // A4 width (11906 twips) minus 1000 twip margins
@@ -446,6 +448,81 @@ function questionBlocks(w: DocxWriter, { number, question, template, marks, alt,
   return out;
 }
 
+/** One Box (and everything inside it) as Word paragraphs and tables. */
+function boxBlocks(w: DocxWriter, b: Box, ctx: { labels: Map<string, string>; key: boolean; marksWord: string }, left: number, right: number): (Paragraph | Table)[] {
+  if (!shownIn(b, ctx.key)) return [];
+  const st = b.style ?? {};
+  const opts: RunOpts = {
+    ...(st.bold ? { bold: true } : {}),
+    ...(st.italic ? { italics: true } : {}),
+    ...(st.scale && st.scale !== 1 ? w.scaled(st.scale) : {}),
+    ...(ctx.key && b.correct ? { bold: true, underline: {} } : {}),
+  };
+  const num = ctx.labels.get(b.id) ?? '';
+  const marks = marksLabel(b, ctx.marksWord);
+  const hang = num ? INDENT : 0;
+  const textLeft = left + hang;
+  const chunks = b.content ? w.chunks(b.content, opts) : [];
+  if (w.bilingual && b.content2) chunks.push(...w.chunks(b.content2, opts));
+  let kids = printOrder(b, ctx.key).filter((c) => shownIn(c, ctx.key));
+  // A numbered box without text of its own takes its first plain text box onto the number line.
+  if ((num || marks) && !chunks.length && kids[0]?.content && !kids[0].number && !kids[0].marks && !kids[0].style?.rule && !kids[0].style?.border && !kids[0].children?.length) {
+    chunks.push(...w.chunks(kids[0].content, opts));
+    if (w.bilingual && kids[0].content2) chunks.push(...w.chunks(kids[0].content2, opts));
+    kids = kids.slice(1);
+  }
+  const out: (Paragraph | Table)[] = [];
+  const before = st.spaceBefore ? st.spaceBefore * 20 : b.number?.scope === 'paper' ? w.gap : 40;
+  const align = st.align ? ALIGN[st.align] : undefined;
+
+  // First line: number, first paragraph of the content, marks on the right — like the printed paper.
+  const first = chunks[0] && !ownLine(chunks[0]) ? chunks.shift()! : null;
+  if (num || marks || first || st.rule || st.pageBreak) {
+    const runs: ParagraphChild[] = [];
+    if (num) runs.push(w.run(num, { bold: !b.number || b.number.scope === 'paper', ...opts }), w.run('\t'));
+    if (first) runs.push(...first.children);
+    if (marks) runs.push(w.run('\t'), w.run(marks, { bold: true }));
+    out.push(w.para(runs, {
+      indent: num ? { left: textLeft, hanging: hang } : { left },
+      spacing: { before, after: 40 },
+      alignment: !num && !marks ? align ?? (first?.align && ALIGN[first.align]) : undefined,
+      pageBreakBefore: st.pageBreak || undefined,
+      keepNext: st.rule || undefined,
+      tabStops: [...(num ? [{ type: TabStopType.LEFT, position: textLeft }] : []), { type: TabStopType.RIGHT, position: right }],
+      border: st.rule ? { bottom: { style: BorderStyle.SINGLE, size: 6, color: '000000', space: 1 } } : undefined,
+    }));
+  }
+  out.push(...w.toBlocks(chunks, st.rule ? left : textLeft, align ? { alignment: align } : {}));
+
+  // Children: stacked, side by side (invisible table), or as a choice with OR between them.
+  const childLeft = st.rule ? left : textLeft;
+  if (b.layout?.mode === 'grid' && kids.length) {
+    const g = optionGrid(kids.length, b.layout.cols || kids.length, b.layout.order ?? 'across');
+    const cellW = Math.floor((right - childLeft) / g.cols);
+    const cells = g.cells.map((i) => {
+      const inner = i === null ? [] : boxBlocks(w, kids[i], ctx, 0, cellW - 120);
+      return inner.length ? inner : [new Paragraph({ children: [] })];
+    });
+    out.push(layoutTable(cells, g.cols, right, childLeft));
+  } else {
+    kids.forEach((c, i) => {
+      if (b.choice && i) out.push(w.para([w.run(w.L('or'), { bold: true })], { alignment: AlignmentType.CENTER, spacing: { before: 60, after: 60 } }));
+      out.push(...boxBlocks(w, c, ctx, childLeft, right));
+    });
+  }
+
+  if (!st.border) return out;
+  // A bordered box is a one-cell table around its content.
+  const line = { style: BorderStyle.SINGLE, size: 6, color: '000000' };
+  const width = right - left;
+  return [new Table({
+    indent: { size: left, type: WidthType.DXA },
+    columnWidths: [width],
+    width: { size: width, type: WidthType.DXA },
+    rows: [new TableRow({ children: [new TableCell({ children: out.length ? out : [new Paragraph({ children: [] })], borders: { top: line, bottom: line, left: line, right: line }, margins: { top: 60, bottom: 60, left: 100, right: 100 } })] })],
+  })];
+}
+
 export async function renderPaperDocx(paper: Paper, liveDb: DB, answerKey: boolean): Promise<Uint8Array> {
   const db = lockedView(paper, liveDb);
   const { settings: s } = db;
@@ -457,7 +534,7 @@ export async function renderPaperDocx(paper: Paper, liveDb: DB, answerKey: boole
     if (a) imageData.set(id, await imageBytes(a).catch(() => new Uint8Array()));
   }
   const w = new DocxWriter(db, paper, imageData);
-  const { sections, totalMarks } = resolvePaper(paper, db);
+  const totalMarks = marksOf(paper.body ?? paperToBox(paper, liveDb));
   const center = (children: ParagraphChild[]) => w.para(children, { alignment: AlignmentType.CENTER });
   const spread = (left: string, right: string) =>
     w.para([w.run(left, { bold: true }), w.run('\t'), w.run(right, { bold: true })], { tabStops: [{ type: TabStopType.RIGHT, position: CONTENT_WIDTH }] });
@@ -476,29 +553,11 @@ export async function renderPaperDocx(paper: Paper, liveDb: DB, answerKey: boole
     spread(`${w.L('class')}: ${paper.className}`, `${w.L('subject')}: ${paper.subject}`),
     spread(`${w.L('time')}: ${paper.duration}${paper.date ? `    ${w.L('date')}: ${paper.date}` : ''}`, `${w.L('maxMarks')}: ${totalMarks}`),
   );
-  if (paper.instructions.trim()) {
-    children.push(w.para([w.run(`${w.L('instructions')}:`, { bold: true })], { spacing: { before: 160, after: 40 } }));
-    children.push(...plain(paper.instructions.trim(), w.scaled(0.92)));
-  }
-  // The header spans the page; questions go in a second section that may have two columns.
+  // The header spans the page; the boxes go in a second section that may have two columns.
   const header = children;
-  const body: (Paragraph | Table)[] = [];
-  for (const sec of sections) {
-    const children = body;
-    if (sec.title || sec.marksLabel) {
-      children.push(
-        w.para([w.run(sec.title, { bold: true }), w.run('\t'), w.run(sec.marksLabel, { bold: true })], {
-          spacing: { before: 240, after: 60 },
-          keepNext: true,
-          tabStops: [{ type: TabStopType.RIGHT, position: w.width }],
-          border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: '000000', space: 1 } },
-        }),
-      );
-    }
-    const instr = sectionInstruction(sec);
-    if (instr) children.push(...plain(instr, { italics: true, ...w.scaled(0.92) }));
-    for (const q of sec.questions) children.push(...questionBlocks(w, q, answerKey, paper.answerSpace));
-  }
+  const root = paper.body ?? paperToBox(paper, liveDb);
+  const ctx = { labels: computeNumbers(root, answerKey), key: answerKey, marksWord: w.L('marks') };
+  const body: (Paragraph | Table)[] = (root.children ?? []).flatMap((b) => boxBlocks(w, b, ctx, 0, w.width));
   body.push(center([w.run(w.L('end'), { bold: true })]));
 
   const style = effectiveStyle(s.paperStyle, paper.style);

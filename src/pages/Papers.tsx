@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import type { Paper } from '../shared/types';
 import { useStore } from '../store';
-import { resolvePaper } from '../lib/paper';
+import { marksOf, walkBoxes } from '../lib/box';
+import { paperToBox } from '../lib/boxMigrate';
+import { PRESETS } from '../lib/presets';
 import { uid } from '../lib/util';
 import PaperEditor from './PaperEditor';
 
@@ -10,7 +12,11 @@ export function newPaper(): Paper {
   return {
     id: uid(), examName: '', subject: '', className: '', duration: '3 Hours', date: '', answerSpace: false,
     instructions: '1. All questions are compulsory.\n2. Marks for each question are shown on the right.',
-    sections: [{ id: uid(), title: 'Section A', instruction: '', questionIds: [] }],
+    sections: [],
+    body: {
+      id: uid(),
+      children: [PRESETS.find((p) => p.name === 'Instructions')!.make(), { ...PRESETS.find((p) => p.name === 'Section / heading')!.make(), children: [PRESETS.find((p) => p.name === 'Question')!.make()] }],
+    },
     createdAt: now, updatedAt: now,
   };
 }
@@ -43,12 +49,14 @@ export default function Papers() {
       <table className="list">
         <tbody>
           {papers.map((p) => {
-            const r = resolvePaper(p, db);
+            const body = p.body ?? paperToBox(p, db);
+            let questions = 0;
+            walkBoxes(body, (b) => { if (b.number?.scope === 'paper') questions++; });
             return (
               <tr key={p.id} onDoubleClick={() => setOpenId(p.id)}>
                 <td className="grow"><b>{p.examName || t('untitled')}</b>{p.locked && <span className="tag">🔒 locked</span>}<div className="muted">{[p.className, p.subject].filter(Boolean).join(' · ')}</div></td>
-                <td>{r.sections.reduce((n, s) => n + s.questions.length, 0)} {t('questions')}</td>
-                <td>{r.totalMarks} {t('marks')}</td>
+                <td>{questions} {t('questions')}</td>
+                <td>{marksOf(body)} {t('marks')}</td>
                 <td className="muted">{new Date(p.updatedAt).toLocaleDateString()}</td>
                 <td className="actions">
                   <button onClick={() => setOpenId(p.id)}>{t('open')}</button>

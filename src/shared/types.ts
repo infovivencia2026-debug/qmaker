@@ -163,6 +163,8 @@ export interface DB {
   questions: Question[];
   papers: Paper[];
   images: Record<string, ImageAsset>;
+  /** Saved boxes (the question bank / your own templates). */
+  library: import('../lib/box').Box[];
 }
 
 /** A shareable file (.qbank / .qpaper) — small enough to send on WhatsApp. */
@@ -175,4 +177,5 @@ export interface Bundle {
   questions: Question[];
   papers: Paper[];
   images?: Record<string, ImageAsset>;
+  library?: import('../lib/box').Box[];
 }
