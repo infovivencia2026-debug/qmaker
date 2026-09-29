@@ -1,0 +1,84 @@
+{
+  "name": "qmaker",
+  "productName": "QMaker",
+  "version": "0.1.0",
+  "description": "Offline question paper maker",
+  "private": true,
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k -n vite,electron \"vite\" \"npm:dev:electron\"",
+    "dev:electron": "tsc -p tsconfig.electron.json && wait-on tcp:5173 && node scripts/electron-dev.cjs",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "build": "tsc -p tsconfig.electron.json && tsc --noEmit && vite build",
+    "dist:win": "npm run build && electron-builder --win --x64",
+    "dist:portable": "npm run build && electron-builder --win --x64 --dir && node scripts/make-portable.cjs",
+    "dist:share": "npm run build && electron-builder --win --x64 && node scripts/make-share.cjs"
+  },
+  "build": {
+    "appId": "com.qmaker.app",
+    "productName": "QMaker",
+    "files": [
+      "dist/**",
+      "dist-electron/**",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": true,
+      "createDesktopShortcut": "always",
+      "shortcutName": "QMaker",
+      "createStartMenuShortcut": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "Install QMaker.${ext}"
+    },
+    "fileAssociations": [
+      {
+        "ext": "qbank",
+        "name": "QMaker Question Bank"
+      },
+      {
+        "ext": "qpaper",
+        "name": "QMaker Paper"
+      }
+    ]
+  },
+  "dependencies": {
+    "@fontsource/arimo": "^5.3.0",
+    "@fontsource/hind": "^5.3.0",
+    "@fontsource/mandali": "^5.3.0",
+    "@fontsource/mukta": "^5.3.0",
+    "@fontsource/noto-sans": "^5.3.0",
+    "@fontsource/noto-sans-devanagari": "^5.3.0",
+    "@fontsource/noto-sans-telugu": "^5.3.0",
+    "@fontsource/noto-serif": "^5.3.0",
+    "@fontsource/noto-serif-devanagari": "^5.3.0",
+    "@fontsource/noto-serif-telugu": "^5.3.0",
+    "@fontsource/ntr": "^5.3.0",
+    "@fontsource/suranna": "^5.3.0",
+    "@fontsource/tinos": "^5.3.0",
+    "@fontsource/tiro-devanagari-hindi": "^5.3.0",
+    "@fontsource/tiro-telugu": "^5.3.0",
+    "docx": "^9.8.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1",
+    "wait-on": "^9.4.0"
+  }
+}
