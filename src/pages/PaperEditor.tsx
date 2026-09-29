@@ -11,6 +11,7 @@ import { blankQuestion } from '../components/QuestionForm';
 import QuestionPicker from '../components/QuestionPicker';
 import Modal from '../components/Modal';
 import RichInput from '../components/RichInput';
+import Toolbar from '../components/rich/Toolbar';
 import { effectiveStyle, fontStack } from '../lib/fonts';
 import { paperLabels } from '../lib/labels';
 import QuestionBlock from '../components/editor/QuestionBlock';
@@ -301,6 +302,7 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
         </div>
       </header>
 
+      {!paper.locked && <Toolbar />}
       <div className="wp-body">
         <div className="wp-canvas" onMouseDown={() => select({ kind: 'paper' })}>
           <style>{PAPER_CSS}</style>

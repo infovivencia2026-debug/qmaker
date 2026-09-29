@@ -1,4 +1,5 @@
-import { maxImageWidth, plainText } from './rich';
+import { richMaxImageWidth, richPlain } from './richdoc';
+import { maxImageWidth } from './rich';
 import { paperLabels, type PaperLang } from './labels';
 import type { QuestionLayout, Section, DB, FieldDef, OptionsValue, PairsValue, Paper, Part, PartNumbering, PartsValue, Question, Template } from '../shared/types';
 
@@ -146,9 +147,9 @@ export const secondKey = (key: string) => `${key}@2`;
 
 /** Options print in 4, 2 or 1 columns depending on how long they are. */
 export function optionColumns(items: string[]) {
-  const img = Math.max(0, ...items.map(maxImageWidth));
+  const img = Math.max(0, ...items.map((s) => Math.max(maxImageWidth(s), richMaxImageWidth(s))));
   if (img) return img <= 35 ? 4 : img <= 80 ? 2 : 1;
-  const longest = Math.max(0, ...items.map((s) => plainText(s).length));
+  const longest = Math.max(0, ...items.map((s) => richPlain(s).length));
   return longest <= 18 ? 4 : longest <= 40 ? 2 : 1;
 }
 
@@ -185,7 +186,7 @@ export function optionGrid(count: number, cols: number, order: 'across' | 'down'
 export function questionSummary(q: Question, t: Template | undefined) {
   const f = t?.fields.find((f) => f.type === 'text' && !f.answer);
   const text = f ? asText(q.data[f.key]) : '';
-  return plainText(text).replace(/\s+/g, ' ').trim() || '(empty)';
+  return richPlain(text).replace(/\s+/g, ' ').trim() || '(empty)';
 }
 
 /** Every question a paper uses, including "OR" alternatives. */

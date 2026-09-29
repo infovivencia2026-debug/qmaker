@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { collectImageIds, hasImage, imgToken, joinRich, maxImageWidth, parseRich, plainText, richHtml } from '../lib/rich';
+import { collectImageIds, groupCols, groupLabel, groupToken, hasImage, imgToken, joinRich, maxImageWidth, parseRich, plainText, richHtml } from '../lib/rich';
 import { optionColumns } from '../lib/paper';
 import { seededOrder } from '../lib/util';
 
@@ -64,5 +64,45 @@ describe('match-the-following shuffle', () => {
     const order = seededOrder(pairs.length, 'q-match');
     const printedRight = order.map((j) => pairs[j][1]);
     pairs.forEach((p, i) => expect(printedRight[order.indexOf(i)]).toBe(p[1]));
+  });
+});
+
+describe('image groups', () => {
+  const g = { items: [{ id: 'a-1', caption: 'Lion, king | of ]] jungle' }, { id: 'b-2', caption: 'शेर ~ సింహం' }, { id: 'c-3', caption: '' }], cols: 0, width: 0, label: 'a' as const, align: 'center' as const };
+
+  it('round-trips through its token, including tricky captions', () => {
+    const s = `Identify: ${groupToken(g)} done`;
+    const segs = parseRich(s);
+    expect(segs.map((x) => x.kind)).toEqual(['text', 'grp', 'text']);
+    expect(segs[1]).toEqual({ kind: 'grp', ...g });
+    expect(joinRich(segs)).toBe(s);
+  });
+
+  it('collects every image in a group and counts as a picture', () => {
+    expect([...collectImageIds(groupToken(g))].sort()).toEqual(['a-1', 'b-2', 'c-3']);
+    expect(hasImage(groupToken(g))).toBe(true);
+    expect(plainText(`x ${groupToken(g)}`)).toBe('x 🖼');
+  });
+
+  it('"one row" uses as many columns as images; fixed columns wrap', () => {
+    expect(groupCols({ ...g, cols: 0 })).toBe(3);
+    expect(groupCols({ ...g, cols: 2 })).toBe(2);
+    expect(groupCols({ ...g, cols: 10 })).toBe(3);
+  });
+
+  it('labels count in every style', () => {
+    expect([0, 1, 9].map((i) => groupLabel('a', i))).toEqual(['(a)', '(b)', '(j)']);
+    expect([0, 3].map((i) => groupLabel('i', i))).toEqual(['(i)', '(iv)']);
+    expect(groupLabel('A', 2)).toBe('(C)');
+    expect(groupLabel('1', 9)).toBe('(10)');
+    expect(groupLabel('none', 0)).toBe('');
+  });
+
+  it('renders a grid with labels and escaped captions', () => {
+    const html = richHtml(groupToken({ ...g, cols: 2, width: 25 }), { 'a-1': { id: 'a-1', w: 1, h: 1, file: 'a-1.png' } });
+    expect(html).toContain('grid-template-columns: repeat(2, 25mm)');
+    expect(html).toContain('<figcaption>(a) Lion, king | of ]] jungle</figcaption>');
+    expect(html).toContain('<figcaption>(b) शेर ~ సింహం</figcaption>');
+    expect(html).toContain('<figcaption>(c)</figcaption>');
   });
 });

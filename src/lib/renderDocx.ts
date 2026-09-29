@@ -6,7 +6,8 @@ import {
 import type { DB, ImageAlign, ImageAsset, Paper, Question, QuestionLayout, Template } from '../shared/types';
 import { letter, seededOrder } from './util';
 import { asOptions, asPairs, asParts, asText, fieldValue, effectiveLayout, lockedView, optionColumns, optionGrid, paperQuestionIds, partLabel, resolvePaper, secondKey, sectionInstruction, type ResolvedQuestion } from './paper';
-import { collectImageIds, hasImage, parseRich } from './rich';
+import { collectImageIds } from './rich';
+import { richBody, richHasImage } from './richdoc';
 import { imageBytes, imgType } from './images';
 import { effectiveStyle, wordLatinFont } from './fonts';
 import { paperLabels, type LabelKey } from './labels';
@@ -19,7 +20,7 @@ const NONE = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' };
 const NO_BORDERS = { top: NONE, bottom: NONE, left: NONE, right: NONE, insideHorizontal: NONE, insideVertical: NONE };
 
 /** Invisible table used to lay things out side by side (option grids, parts in columns). */
-function layoutTable(cells: (Paragraph | Table)[][], cols: number, width: number, indent: number) {
+function layoutTable(cells: (Paragraph | Table)[][], cols: number, width: number, indent: number, alignment?: (typeof AlignmentType)[keyof typeof AlignmentType]) {
   const colWidth = Math.floor((width - indent) / cols);
   const rows: TableRow[] = [];
   for (let i = 0; i < cells.length; i += cols) {
@@ -27,16 +28,26 @@ function layoutTable(cells: (Paragraph | Table)[][], cols: number, width: number
     while (row.length < cols) row.push([new Paragraph({ children: [] })]);
     rows.push(new TableRow({ children: row.map((children) => new TableCell({ children, width: { size: colWidth, type: WidthType.DXA }, borders: NO_BORDERS })) }));
   }
-  return new Table({ rows, borders: NO_BORDERS, indent: { size: indent, type: WidthType.DXA }, columnWidths: Array(cols).fill(colWidth), width: { size: colWidth * cols, type: WidthType.DXA } });
+  return new Table({ rows, borders: NO_BORDERS, alignment, indent: alignment ? undefined : { size: indent, type: WidthType.DXA }, columnWidths: Array(cols).fill(colWidth), width: { size: colWidth * cols, type: WidthType.DXA } });
 }
 const INDENT = 560;
 const PX_PER_MM = 96 / 25.4;
 
 type RunOpts = Partial<IRunOptions>;
-const ALIGN = { left: AlignmentType.LEFT, center: AlignmentType.CENTER } as const;
+const ALIGN = { left: AlignmentType.LEFT, center: AlignmentType.CENTER, right: AlignmentType.RIGHT, justify: AlignmentType.JUSTIFIED } as const;
 
 /** A paragraph's worth of content; block images (left/center) get a paragraph of their own. */
-interface Chunk { children: ParagraphChild[]; align?: 'left' | 'center' }
+interface Chunk {
+  children: ParagraphChild[];
+  align?: 'left' | 'center' | 'right' | 'justify';
+  table?: Table;
+  /** Answer lines to draw. */
+  lines?: number;
+  /** Horizontal rule. */
+  rule?: boolean;
+  /** List nesting depth (extra indent). */
+  extraIndent?: number;
+}
 
 class DocxWriter {
   readonly size: number; // half-points
@@ -88,39 +99,137 @@ class DocxWriter {
     });
   }
 
-  /** Text with images → paragraphs' worth of runs. `flat` keeps everything in one chunk (option rows). */
-  chunks(s: string, opts: RunOpts = {}, flat = false): Chunk[] {
-    const out: Chunk[] = [{ children: [] }];
-    const cur = () => out[out.length - 1];
-    const segs = parseRich(s);
-    segs.forEach((seg, i) => {
-      if (seg.kind !== 'text' || flat) return;
-      const isBlock = (x?: (typeof segs)[number]) => x?.kind === 'img' && x.align !== 'inline' && x.align !== 'right';
-      if (isBlock(segs[i - 1])) seg.text = seg.text.replace(/^\n/, '');
-      if (isBlock(segs[i + 1])) seg.text = seg.text.replace(/\n$/, '');
-    });
-    for (const seg of segs) {
-      if (seg.kind === 'text') {
-        seg.text.split('\n').forEach((line, i) => {
-          if (i || line) cur().children.push(this.run(line, { ...opts, break: i ? 1 : 0 }));
-        });
-        continue;
+  /** Rich content (editor HTML, or older text) → paragraph-sized chunks; tables and blocks come as tables/paragraphs. */
+  chunks(s: string, opts: RunOpts = {}, _flat = false): Chunk[] {
+    if (!s) return [{ children: [] }];
+    const out: Chunk[] = [];
+    const walkBlocks = (el: Element, depth = 0) => {
+      for (const node of [...el.childNodes]) {
+        if (node.nodeType === 3) {
+          if (node.textContent?.trim()) out.push({ children: this.inline(node, opts) });
+          continue;
+        }
+        if (node.nodeType !== 1) continue;
+        const n = node as Element;
+        switch (n.tagName) {
+          case 'P': {
+            const align = /text-align:\s*(\w+)/.exec(n.getAttribute('style') ?? '')?.[1];
+            out.push({ children: this.inline(n, opts), align: align as Chunk['align'], extraIndent: depth });
+            break;
+          }
+          case 'UL':
+          case 'OL': {
+            let k = Number(n.getAttribute('start')) || 1;
+            for (const li of [...n.children].filter((c) => c.tagName === 'LI')) {
+              const bullet = n.tagName === 'UL' ? '•' : `${k++}.`;
+              const first = out.length;
+              walkBlocks(li, depth + 1);
+              const target = out[first];
+              if (target && !target.table) target.children.unshift(this.run(`${bullet}\t`, opts));
+              else out.splice(first, 0, { children: [this.run(bullet, opts)], extraIndent: depth + 1 });
+            }
+            break;
+          }
+          case 'TABLE':
+            out.push({ children: [], table: this.table(n, opts) });
+            break;
+          case 'DIV':
+            if (n.hasAttribute('data-lines')) out.push({ children: [], lines: Math.min(Number(n.getAttribute('data-lines')) || 1, 60) });
+            else if (n.hasAttribute('data-box')) out.push({ children: [], table: this.box(Number(n.getAttribute('data-box')) || 40) });
+            else walkBlocks(n, depth);
+            break;
+          case 'HR':
+            out.push({ children: [], rule: true });
+            break;
+          default:
+            out.push({ children: this.inline(n, opts) });
+        }
       }
-      const asset = this.db.images[seg.id];
-      if (!asset || !this.imageData.has(seg.id)) continue;
-      if (flat || seg.align === 'inline' || seg.align === 'right') {
-        cur().children.push(this.image(asset, seg.width, flat && seg.align === 'right' ? 'inline' : seg.align));
-      } else {
-        if (!cur().children.length) out.pop();
-        out.push({ children: [this.image(asset, seg.width, seg.align)], align: seg.align }, { children: [] });
-      }
-    }
-    if (out.length > 1 && !cur().children.length) out.pop();
-    return out;
+    };
+    walkBlocks(richBody(s));
+    return out.length ? out : [{ children: [] }];
   }
 
+  /** Inline content with formatting marks, line breaks and pictures. */
+  private inline(node: Node, opts: RunOpts): ParagraphChild[] {
+    const runs: ParagraphChild[] = [];
+    const walk = (n: Node, o: RunOpts) => {
+      if (n.nodeType === 3) {
+        if (n.textContent) runs.push(this.run(n.textContent, o));
+        return;
+      }
+      if (n.nodeType !== 1) return;
+      const el = n as Element;
+      const t = el.tagName;
+      if (t === 'BR') return void runs.push(this.run('', { ...o, break: 1 }));
+      if (t === 'IMG') {
+        const a = this.db.images[el.getAttribute('data-id') ?? ''];
+        if (a && this.imageData.has(a.id)) runs.push(this.image(a, Number(el.getAttribute('data-width')) || 30, (el.getAttribute('data-align') ?? 'inline') as ImageAlign));
+        return;
+      }
+      const next: RunOpts = { ...o };
+      if (t === 'STRONG') Object.assign(next, { bold: true });
+      if (t === 'EM') Object.assign(next, { italics: true });
+      if (t === 'U') Object.assign(next, { underline: {} });
+      if (t === 'S') Object.assign(next, { strike: true });
+      if (t === 'SUB') Object.assign(next, { subScript: true });
+      if (t === 'SUP') Object.assign(next, { superScript: true });
+      el.childNodes.forEach((c) => walk(c, next));
+    };
+    if (node.nodeType === 3) walk(node, opts);
+    else node.childNodes.forEach((c) => walk(c, opts));
+    return runs;
+  }
+
+  /** Editor table → Word table (merged cells, header row, borders on/off). */
+  private table(el: Element, opts: RunOpts): Table {
+    const borderless = el.getAttribute('data-borderless') === 'true';
+    const rows = [...el.querySelectorAll(':scope > tbody > tr, :scope > thead > tr, :scope > tr')];
+    const cols = Math.max(1, ...rows.map((r) => [...r.children].reduce((n, c) => n + (Number(c.getAttribute('colspan')) || 1), 0)));
+    const total = this.width - INDENT;
+    const colWidth = Math.floor(total / cols);
+    const line = { style: BorderStyle.SINGLE, size: 4, color: '000000' };
+    const borders = borderless ? NO_BORDERS : { top: line, bottom: line, left: line, right: line, insideHorizontal: line, insideVertical: line };
+    return new Table({
+      borders,
+      indent: { size: INDENT, type: WidthType.DXA },
+      columnWidths: Array(cols).fill(colWidth),
+      width: { size: colWidth * cols, type: WidthType.DXA },
+      rows: rows.map((tr) => new TableRow({
+        tableHeader: [...tr.children].some((c) => c.tagName === 'TH'),
+        children: [...tr.children].map((cell) => {
+          const span = Number(cell.getAttribute('colspan')) || 1;
+          const isHead = cell.tagName === 'TH';
+          const inner = this.toBlocks(this.chunks(cell.innerHTML || '<p></p>', isHead ? { ...opts, bold: true } : opts), 0);
+          return new TableCell({
+            children: inner.length ? inner : [new Paragraph({ children: [] })],
+            columnSpan: span > 1 ? span : undefined,
+            rowSpan: Number(cell.getAttribute('rowspan')) > 1 ? Number(cell.getAttribute('rowspan')) : undefined,
+            width: { size: colWidth * span, type: WidthType.DXA },
+            borders: borderless ? NO_BORDERS : undefined,
+            shading: isHead && !borderless ? { fill: 'F2F2F2', type: 'clear', color: 'auto' } : undefined,
+          });
+        }),
+      })),
+    });
+  }
+
+  /** Empty bordered box of a given height (mm) for drawings. */
+  private box(heightMm: number): Table {
+    const line = { style: BorderStyle.SINGLE, size: 6, color: '000000' };
+    const width = this.width - INDENT;
+    return new Table({
+      indent: { size: INDENT, type: WidthType.DXA },
+      columnWidths: [width],
+      width: { size: width, type: WidthType.DXA },
+      rows: [new TableRow({ height: { value: Math.round(Math.min(heightMm, 250) * 56.7), rule: 'exact' }, children: [new TableCell({ children: [new Paragraph({ children: [] })], borders: { top: line, bottom: line, left: line, right: line } })] })],
+    });
+  }
+
+  /** Rich content squeezed into one paragraph (option cells): paragraphs joined by line breaks. */
   flat(s: string, opts: RunOpts = {}) {
-    return this.chunks(s, opts, true)[0].children;
+    const parts = this.chunks(s, opts).filter((c) => c.children.length);
+    return parts.flatMap((c, i) => (i ? [this.run('', { break: 1 }), ...c.children] : c.children));
   }
 
   para(children: ParagraphChild[], extra: Record<string, unknown> = {}) {
@@ -128,9 +237,22 @@ class DocxWriter {
   }
 
   /** Multi-paragraph block of rich text, indented under the question number. */
-  block(s: string, opts: RunOpts = {}, left = INDENT) {
-    return this.chunks(s, opts).map((c) => this.para(c.children, { indent: { left }, alignment: c.align && ALIGN[c.align] }));
+  /** Paragraphs/tables for chunks, indented to `left`. */
+  toBlocks(chunks: Chunk[], left = INDENT, extra: Record<string, unknown> = {}): (Paragraph | Table)[] {
+    return chunks.flatMap((c): (Paragraph | Table)[] => {
+      if (c.table) return [c.table];
+      if (c.rule) return [new Paragraph({ children: [], indent: { left }, border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: '000000', space: 1 } } })];
+      if (c.lines)
+        return Array.from({ length: c.lines }, () => new Paragraph({ children: [this.run('')], indent: { left }, spacing: { before: 200 }, border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: '999999', space: 1 } } }));
+      const ind = left + (c.extraIndent ?? 0) * 360;
+      return [this.para(c.children, { indent: c.extraIndent ? { left: ind, hanging: 280 } : { left }, tabStops: c.extraIndent ? [{ type: TabStopType.LEFT, position: ind }] : undefined, alignment: c.align && ALIGN[c.align], ...extra })];
+    });
   }
+
+  block(s: string, opts: RunOpts = {}, left = INDENT) {
+    return this.toBlocks(this.chunks(s, opts), left);
+  }
+
 }
 
 async function logoRun(dataUrl: string) {
@@ -147,6 +269,9 @@ async function logoRun(dataUrl: string) {
 }
 
 type QLike = Pick<Question, 'id' | 'data'> & { layout?: QuestionLayout };
+
+/** Content that can't share the question-number line: tables, lines, rules, non-left paragraphs. */
+const ownLine = (c: Chunk) => !!(c.table || c.lines || c.rule || (c.align && c.align !== 'left'));
 
 interface BlockOpts {
   label: string;
@@ -182,15 +307,16 @@ function fieldBlocks(w: DocxWriter, q: QLike, template: Template, o: BlockOpts, 
     if (!numbered) {
       const [first, ...rest] = w.chunks(s, opts);
       // A centred/left image as the very first thing still needs the number line above it.
-      if (first.align) out.push(firstLine(prefix), ...w.block(s, opts, left));
-      else out.push(firstLine([...prefix, ...first.children]), ...rest.map((c) => w.para(c.children, { indent: { left: left }, alignment: c.align && ALIGN[c.align] })));
+      if (ownLine(first)) out.push(firstLine(prefix), ...w.block(s, opts, left));
+      else out.push(firstLine([...prefix, ...first.children]), ...w.toBlocks(rest, left));
       return;
     }
     if (prefix.length) {
       const [first, ...rest] = w.chunks(s, opts);
-      out.push(w.para([...prefix, ...(first.align ? [] : first.children)], { indent: { left: left } }));
-      if (first.align) out.push(w.para(first.children, { indent: { left: left }, alignment: ALIGN[first.align] }));
-      out.push(...rest.map((c) => w.para(c.children, { indent: { left: left }, alignment: c.align && ALIGN[c.align] })));
+      const blockFirst = ownLine(first);
+      out.push(w.para([...prefix, ...(blockFirst ? [] : first.children)], { indent: { left: left } }));
+      if (blockFirst) out.push(...w.toBlocks([first], left));
+      out.push(...w.toBlocks(rest, left));
       return;
     }
     out.push(...paras);
@@ -232,7 +358,7 @@ function fieldBlocks(w: DocxWriter, q: QLike, template: Template, o: BlockOpts, 
           const cells = grid.cells.map((i) => [new Paragraph({ children: i === null ? [] : cellRuns(i), spacing: { after: 40 } })]);
           out.push(layoutTable(cells, grid.cols, right, left));
         }
-        if (answerKey && correct !== null) addRich(hasImage(items[correct]) ? '' : items[correct], { italics: true }, [w.run(`${w.L('answer')}: (${letter(correct)}) `, { bold: true })]);
+        if (answerKey && correct !== null) addRich(richHasImage(items[correct]) ? '' : items[correct], { italics: true }, [w.run(`${w.L('answer')}: (${letter(correct)}) `, { bold: true })]);
         break;
       }
       case 'pairs': {
@@ -243,7 +369,7 @@ function fieldBlocks(w: DocxWriter, q: QLike, template: Template, o: BlockOpts, 
         const cell = (label: string, s: string, bold = false) =>
           new TableCell({
             width: { size: 50, type: WidthType.PERCENTAGE },
-            children: w.chunks(s, { bold }).map((c, i) => new Paragraph({ children: i ? c.children : [w.run(label, { bold }), ...c.children], alignment: c.align && ALIGN[c.align] })),
+            children: w.chunks(s, { bold }).map((c, i) => c.table ?? new Paragraph({ children: i ? c.children : [w.run(label, { bold }), ...c.children], alignment: c.align && ALIGN[c.align] })),
           });
         out.push(new Table({
           width: { size: 90, type: WidthType.PERCENTAGE },
@@ -312,8 +438,7 @@ export async function renderPaperDocx(paper: Paper, liveDb: DB, answerKey: boole
   const center = (children: ParagraphChild[]) => w.para(children, { alignment: AlignmentType.CENTER });
   const spread = (left: string, right: string) =>
     w.para([w.run(left, { bold: true }), w.run('\t'), w.run(right, { bold: true })], { tabStops: [{ type: TabStopType.RIGHT, position: CONTENT_WIDTH }] });
-  const plain = (text: string, opts: RunOpts = {}, extra: Record<string, unknown> = {}) =>
-    w.chunks(text, opts).map((c) => w.para(c.children, { alignment: c.align && ALIGN[c.align], ...extra }));
+  const plain = (text: string, opts: RunOpts = {}) => w.toBlocks(w.chunks(text, opts), 0);
 
   const logo = s.logo ? await logoRun(s.logo).catch(() => null) : null;
   const children: (Paragraph | Table)[] = [];

@@ -7,6 +7,7 @@ import { asOptions, asParts, asText, fieldValue, papersUsing, partLabel, partsMa
 import { letter, uid } from '../lib/util';
 import Modal from './Modal';
 import RichInput from './RichInput';
+import Toolbar from './rich/Toolbar';
 
 export function blankQuestion(template: Template, subject = '', chapter = ''): Question {
   const data: Record<string, unknown> = {};
@@ -207,6 +208,7 @@ export default function QuestionForm({ initial, onClose }: { initial: Question; 
       </div>
       <datalist id="subjects">{subjects.map((s) => <option key={s} value={s} />)}</datalist>
       <datalist id="chapters">{chapters.map((s) => <option key={s} value={s} />)}</datalist>
+      <div className="form-ribbon"><Toolbar /></div>
       <label className="check bilingual-toggle">
         <input type="checkbox" checked={bilingual} onChange={(e) => setBilingual(e.target.checked)} /> Also write it in a second language (for bilingual papers)
       </label>

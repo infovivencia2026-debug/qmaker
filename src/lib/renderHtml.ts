@@ -1,7 +1,7 @@
 import type { DB, Paper, Question, QuestionLayout, Template } from '../shared/types';
 import { esc, letter, seededOrder } from './util';
 import { asOptions, asPairs, asParts, asText, fieldValue, effectiveLayout, lockedView, optionColumns, optionGrid, partLabel, resolvePaper, secondKey, sectionInstruction, type ResolvedQuestion } from './paper';
-import { hasImage, richHtml } from './rich';
+import { renderRich, renderRichInline, richHasImage } from './richdoc';
 import { effectiveStyle, styleVars } from './fonts';
 import { paperLabels, type LabelKey } from './labels';
 
@@ -52,6 +52,15 @@ export const PAPER_CSS = `
 .qp .q.part .qm { font-weight: normal; }
 .qp .or { text-align: center; font-weight: 700; margin: 2pt 0; }
 .qp .either > .q { margin-bottom: 2pt; }
+.qp p { margin: 0; }
+.qp ul, .qp ol { margin: 2pt 0; padding-left: 1.6em; }
+.qp table.rt { border-collapse: collapse; margin: 4pt 0; width: 100%; table-layout: fixed; }
+.qp table.rt td, .qp table.rt th { border: 1px solid #000; padding: 2pt 6pt; vertical-align: top; }
+.qp table.rt th { font-weight: 700; background: #f2f2f2; }
+.qp table.rt.borderless td, .qp table.rt.borderless th { border: 0; background: none; padding: 1pt 4pt; }
+.qp .drawbox { border: 1px solid #000; margin: 4pt 0; }
+.qp hr { border: 0; border-top: 1px solid #000; margin: 4pt 0; }
+.qp .opts > div > .t2, .qp .ans > .t2 { margin-top: 0; }
 .qp .end { text-align: center; margin-top: 18px; font-weight: 600; clear: both; }
 /* images */
 .qp img.qi { max-width: 100%; height: auto; }
@@ -59,6 +68,11 @@ export const PAPER_CSS = `
 .qp img.qi.al-left { display: block; margin: 4px 0; }
 .qp img.qi.al-center { display: block; margin: 4px auto; }
 .qp img.qi.al-right { float: right; margin: 2px 0 4px 10px; }
+.qp .igrp { display: grid; gap: 3mm 4mm; margin: 4px 0; }
+.qp .igrp.al-center { justify-content: center; }
+.qp .igrp figure { margin: 0; text-align: center; break-inside: avoid; min-width: 0; }
+.qp .igrp img { width: 100%; height: auto; display: block; }
+.qp .igrp figcaption { font-size: calc(var(--fs) * 0.9); line-height: 1.25; margin-top: 1mm; white-space: pre-wrap; }
 .qp .opts img.qi.al-left, .qp .opts img.qi.al-center, .qp table.pairs img.qi { margin: 2px 0; }
 `;
 
@@ -83,7 +97,8 @@ export const answerLabel = (template: Template, label: string, L: (k: LabelKey) 
 function renderFields(q: QLike, template: Template, ctx: Ctx): string {
   const { db, answerKey, answerSpace, bilingual, L } = ctx;
   const layout = effectiveLayout(q.layout, ctx.sectionLayout);
-  const rich = (s: string) => richHtml(s, db.images);
+  const rich = (s: string) => renderRich(s, db.images);
+  const inline = (s: string) => renderRichInline(s, db.images);
   const parts: string[] = [];
   for (const f of template.fields) {
     const v = fieldValue(q, f);
@@ -94,7 +109,7 @@ function renderFields(q: QLike, template: Template, ctx: Ctx): string {
         const text2 = bilingual ? asText(q.data[secondKey(f.key)]) : '';
         if (!text && !text2) break;
         if (f.answer) {
-          parts.push(`<div class="ans"><b>${esc(answerLabel(template, f.label, L))}:</b> ${rich(text)}${text2 ? `<div class="t2">${rich(text2)}</div>` : ''}</div>`);
+          parts.push(`<div class="ans"><b>${esc(answerLabel(template, f.label, L))}:</b> ${inline(text)}${text2 ? `<div class="t2">${rich(text2)}</div>` : ''}</div>`);
         } else {
           parts.push(`<div class="t">${rich(text)}</div>`);
           if (text2) parts.push(`<div class="t t2">${rich(text2)}</div>`);
@@ -106,22 +121,22 @@ function renderFields(q: QLike, template: Template, ctx: Ctx): string {
         break;
       case 'options': {
         const { items, items2, correct } = asOptions(v);
-        const second = (i: number) => (bilingual && items2?.[i] ? `\n${rich(items2[i])}` : '');
+        const second = (i: number) => (bilingual && items2?.[i] ? `<div class="t2">${inline(items2[i])}</div>` : '');
         const cols = layout.optionCols || optionColumns(bilingual ? [...items, ...(items2 ?? [])] : items);
         const grid_ = optionGrid(items.length, cols, layout.optionOrder);
         const cells = grid_.cells
-          .map((i) => (i === null ? '<div></div>' : `<div class="${answerKey && i === correct ? 'ok' : ''}"><span class="ol">(${letter(i)})</span> ${rich(items[i])}${second(i)}</div>`))
+          .map((i) => (i === null ? '<div></div>' : `<div class="${answerKey && i === correct ? 'ok' : ''}"><span class="ol">(${letter(i)})</span> ${inline(items[i])}${second(i)}</div>`))
           .join('');
         parts.push(`<div class="opts" style="grid-template-columns: repeat(${grid_.cols}, minmax(0, 1fr))">${cells}</div>`);
         // Picture options: the underlined option is enough, don't print the picture twice.
-        if (answerKey && correct !== null) parts.push(`<div class="ans"><b>${L('answer')}:</b> (${letter(correct)}) ${hasImage(items[correct]) ? '' : rich(items[correct])}</div>`);
+        if (answerKey && correct !== null) parts.push(`<div class="ans"><b>${L('answer')}:</b> (${letter(correct)}) ${richHasImage(items[correct]) ? '' : inline(items[correct])}</div>`);
         break;
       }
       case 'pairs': {
         const pairs = asPairs(v);
         const order = seededOrder(pairs.length, q.id);
         const rows = pairs
-          .map((p, i) => `<tr><td>${i + 1}. ${rich(p[0])}</td><td>(${letter(i)}) ${rich(pairs[order[i]][1])}</td></tr>`)
+          .map((p, i) => `<tr><td>${i + 1}. ${inline(p[0])}</td><td>(${letter(i)}) ${inline(pairs[order[i]][1])}</td></tr>`)
           .join('');
         parts.push(`<table class="pairs"><tr><th>A</th><th>B</th></tr>${rows}</table>`);
         if (answerKey) {
@@ -160,7 +175,7 @@ function renderQuestion({ number, question: q, template, marks, alt, sectionLayo
 export function renderPaperHtml(paper: Paper, liveDb: DB, answerKey: boolean) {
   const db = lockedView(paper, liveDb);
   const { settings: s } = db;
-  const rich = (t: string) => richHtml(t, db.images);
+  const rich = (t: string) => renderRich(t, db.images);
   const { sections, totalMarks, missing } = resolvePaper(paper, db);
   const style = effectiveStyle(s.paperStyle, paper.style);
   const L = paperLabels(paper.labelLang);
@@ -179,7 +194,7 @@ export function renderPaperHtml(paper: Paper, liveDb: DB, answerKey: boolean) {
     <div class="meta"><span>${L('class')}: ${esc(paper.className)}</span><span>${L('subject')}: ${esc(paper.subject)}</span></div>
     <div class="meta"><span>${L('time')}: ${esc(paper.duration)}</span>${paper.date ? `<span>${L('date')}: ${esc(paper.date)}</span>` : ''}<span>${L('maxMarks')}: ${totalMarks}</span></div>`;
   const instructions = paper.instructions.trim()
-    ? `<div class="gi"><div class="gi-title">${L('instructions')}:</div><p>${rich(paper.instructions.trim())}</p></div>`
+    ? `<div class="gi"><div class="gi-title">${L('instructions')}:</div><div class="gi-b">${rich(paper.instructions.trim())}</div></div>`
     : '';
   const body = sections
     .map((sec) => {
