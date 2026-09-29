@@ -269,7 +269,7 @@ table.list.compact td { padding: 6px 10px; }
 .qp .parts { margin-top: 2px; }
 .qp .q.part.blk, .qp .parts .q.part { margin: 3pt 0; }
 .qp .part-m { display: flex; align-items: baseline; gap: 2px; }
-.qp .marks-in { width: 2.2em; text-align: center; font-weight: normal; padding: 0; field-sizing: fixed; }
+.qp .marks-in { width: 1.8em; text-align: center; font-weight: normal; padding: 0; field-sizing: fixed; }
 .qp .part-tools { display: inline-flex; margin-left: 2px; }
 .qp .parts-add { flex-wrap: wrap; }
 .qp .part-choices { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
@@ -289,3 +289,25 @@ button.locked-btn { background: #fcf9e8; border-color: var(--warn); color: #614a
 .second-box { margin-top: 4px; padding-left: 10px; border-left: 3px solid #9bb5d6; }
 .rich.boxed.second { background: #f5f8fd; }
 .bilingual-toggle { margin: 4px 0 12px; }
+
+/* ---------- layout controls ---------- */
+.choice { display: flex; flex-wrap: wrap; gap: 0; margin: 2px 0 10px; }
+.choice button { border-radius: 0; margin-left: -1px; padding: 4px 10px; background: #fff; color: var(--dark); border-color: #8c8f94; }
+.choice button:first-child { border-radius: 3px 0 0 3px; margin-left: 0; }
+.choice button:last-child { border-radius: 0 3px 3px 0; }
+.choice button.on { background: var(--dark); color: #fff; border-color: var(--dark); position: relative; z-index: 1; }
+.qp .layout-bar { flex-wrap: wrap; gap: 14px; }
+.qp .seg { display: inline-flex; align-items: center; gap: 1px; }
+.qp .seg-l { margin-right: 4px; }
+.qp .seg .mini { border: 1px solid var(--line); padding: 1px 7px; border-radius: 2px; }
+.qp .seg .mini.on { background: var(--dark); color: #fff; border-color: var(--dark); text-decoration: none; }
+.qp.edit .cols2 .appender { break-inside: avoid; }
+/* Part tools float on hover so they never take width from the text. */
+.qp .q.part { position: relative; }
+.qp .part-m { position: relative; }
+.qp .part-tools { position: absolute; top: -1.6em; right: 0; display: none; background: #fff; border: 1px solid var(--line); border-radius: 2px; z-index: 2; }
+.qp .q.part:hover .part-tools { display: inline-flex; }
+.qp .marks-in { width: 1.8em; }
+.qp .opt { position: relative; }
+.qp .opt > .mini { position: absolute; right: -2px; top: -0.9em; display: none; background: #fff; border: 1px solid var(--line); border-radius: 2px; line-height: 1.2; z-index: 2; }
+.qp .opt:hover > .mini { display: block; }

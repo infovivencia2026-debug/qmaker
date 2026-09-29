@@ -1,11 +1,11 @@
 import {
-  AlignmentType, BorderStyle, Document, HorizontalPositionAlign, HorizontalPositionRelativeFrom, ImageRun, Packer, Paragraph, Table,
+  AlignmentType, BorderStyle, Document, SectionType, HorizontalPositionAlign, HorizontalPositionRelativeFrom, ImageRun, Packer, Paragraph, Table,
   TableCell, TableRow, TabStopType, TextRun, TextWrappingSide, TextWrappingType, VerticalPositionRelativeFrom, WidthType,
   type IRunOptions, type ParagraphChild,
 } from 'docx';
-import type { DB, ImageAlign, ImageAsset, Paper, Question, Template } from '../shared/types';
+import type { DB, ImageAlign, ImageAsset, Paper, Question, QuestionLayout, Template } from '../shared/types';
 import { letter, seededOrder } from './util';
-import { asOptions, asPairs, asParts, asText, fieldValue, lockedView, optionColumns, paperQuestionIds, partLabel, resolvePaper, secondKey, sectionInstruction, type ResolvedQuestion } from './paper';
+import { asOptions, asPairs, asParts, asText, fieldValue, effectiveLayout, lockedView, optionColumns, optionGrid, paperQuestionIds, partLabel, resolvePaper, secondKey, sectionInstruction, type ResolvedQuestion } from './paper';
 import { collectImageIds, hasImage, parseRich } from './rich';
 import { imageBytes, imgType } from './images';
 import { effectiveStyle, wordLatinFont } from './fonts';
@@ -13,6 +13,22 @@ import { paperLabels, type LabelKey } from './labels';
 import { answerLabel } from './renderHtml';
 
 const CONTENT_WIDTH = 9906; // A4 width (11906 twips) minus 1000 twip margins
+const COLUMN_GAP = 400;
+
+const NONE = { style: BorderStyle.NONE, size: 0, color: 'FFFFFF' };
+const NO_BORDERS = { top: NONE, bottom: NONE, left: NONE, right: NONE, insideHorizontal: NONE, insideVertical: NONE };
+
+/** Invisible table used to lay things out side by side (option grids, parts in columns). */
+function layoutTable(cells: (Paragraph | Table)[][], cols: number, width: number, indent: number) {
+  const colWidth = Math.floor((width - indent) / cols);
+  const rows: TableRow[] = [];
+  for (let i = 0; i < cells.length; i += cols) {
+    const row = cells.slice(i, i + cols);
+    while (row.length < cols) row.push([new Paragraph({ children: [] })]);
+    rows.push(new TableRow({ children: row.map((children) => new TableCell({ children, width: { size: colWidth, type: WidthType.DXA }, borders: NO_BORDERS })) }));
+  }
+  return new Table({ rows, borders: NO_BORDERS, indent: { size: indent, type: WidthType.DXA }, columnWidths: Array(cols).fill(colWidth), width: { size: colWidth * cols, type: WidthType.DXA } });
+}
 const INDENT = 560;
 const PX_PER_MM = 96 / 25.4;
 
@@ -29,6 +45,8 @@ class DocxWriter {
   readonly templates: Map<string, Template>;
   readonly L: (k: LabelKey) => string;
   readonly bilingual: boolean;
+  /** Right edge for marks: the page, or one column on a 2-column page. */
+  readonly width: number;
 
   constructor(private db: DB, paper: Paper, private imageData: Map<string, Uint8Array>) {
     const style = effectiveStyle(db.settings.paperStyle, paper.style);
@@ -37,6 +55,7 @@ class DocxWriter {
     this.templates = new Map(db.templates.map((t) => [t.id, t]));
     this.L = paperLabels(paper.labelLang);
     this.bilingual = !!paper.bilingual;
+    this.width = paper.pageCols === 2 ? Math.floor((CONTENT_WIDTH - COLUMN_GAP) / 2) : CONTENT_WIDTH;
     const latin = wordLatinFont(style);
     // Word renders Devanagari/Telugu with the complex-script (cs) font. Nirmala UI ships with every Windows since 8.
     this.font = { ascii: latin, hAnsi: latin, eastAsia: latin, cs: 'Nirmala UI' };
@@ -127,13 +146,26 @@ async function logoRun(dataUrl: string) {
   return new ImageRun({ type, data: bytes, transformation: { width: w, height: h } });
 }
 
-type QLike = Pick<Question, 'id' | 'data'>;
+type QLike = Pick<Question, 'id' | 'data'> & { layout?: QuestionLayout };
+
+interface BlockOpts {
+  label: string;
+  marks: string;
+  /** Where the text starts; parts sit one step further in than their question. */
+  left: number;
+  /** Right edge (marks are right-aligned here). */
+  right: number;
+  bold?: boolean;
+  sectionLayout?: QuestionLayout;
+}
 
 /**
  * Paragraphs for one question (or one part). `label` and `marks` go on the first line;
  * `left` is where the text starts, so parts sit one step further in than their question.
  */
-function fieldBlocks(w: DocxWriter, q: QLike, template: Template, label: string, marks: string, left: number, answerKey: boolean, answerSpace: boolean, bold = true) {
+function fieldBlocks(w: DocxWriter, q: QLike, template: Template, o: BlockOpts, answerKey: boolean, answerSpace: boolean) {
+  const { label, marks, left, right, bold = true } = o;
+  const layout = effectiveLayout(q.layout, o.sectionLayout);
   const out: (Paragraph | Table)[] = [];
   let numbered = false;
   // The first paragraph carries the question number and the marks, like a printed paper.
@@ -142,7 +174,7 @@ function fieldBlocks(w: DocxWriter, q: QLike, template: Template, label: string,
     return w.para([w.run(label, { bold }), w.run('\t'), ...children, w.run('\t'), w.run(marks, { bold })], {
       indent: { left: left, hanging: INDENT },
       spacing: { before: left > INDENT ? 40 : w.gap, after: 60 },
-      tabStops: [{ type: TabStopType.LEFT, position: left }, { type: TabStopType.RIGHT, position: CONTENT_WIDTH }],
+      tabStops: [{ type: TabStopType.LEFT, position: left }, { type: TabStopType.RIGHT, position: right }],
     });
   };
   const addRich = (s: string, opts: RunOpts = {}, prefix: ParagraphChild[] = []) => {
@@ -186,23 +218,19 @@ function fieldBlocks(w: DocxWriter, q: QLike, template: Template, label: string,
       case 'options': {
         const { items, items2, correct } = asOptions(v);
         const twoLang = w.bilingual && !!items2?.some(Boolean);
-        // Bilingual options need two lines each, so they go one per row.
-        const cols = twoLang ? 1 : optionColumns(items);
-        const cell = (i: number) => {
+        const cols = layout.optionCols || optionColumns(twoLang ? [...items, ...(items2 ?? [])] : items);
+        const grid = optionGrid(items.length, cols, layout.optionOrder);
+        const cellRuns = (i: number) => {
           const on = answerKey && i === correct;
-          const second = twoLang && items2?.[i] ? [w.run('', { break: 1 }), w.run('\t'), ...w.flat(items2[i])] : [];
+          const second = twoLang && items2?.[i] ? [w.run('', { break: 1 }), ...w.flat(items2[i])] : [];
           return [w.run(`(${letter(i)}) `, { bold: on }), ...w.flat(items[i], { bold: on, underline: on ? {} : undefined }), ...second];
         };
         ensureNumbered();
-        const colWidth = Math.floor((CONTENT_WIDTH - left) / cols);
-        for (let i = 0; i < items.length; i += cols) {
-          const row = items.slice(i, i + cols).flatMap((_, j) => (j ? [w.run('\t'), ...cell(i + j)] : cell(i + j)));
-          out.push(new Paragraph({
-            children: row,
-            indent: { left: left },
-            spacing: { after: 40 },
-            tabStops: Array.from({ length: cols - 1 }, (_, j) => ({ type: TabStopType.LEFT, position: left + colWidth * (j + 1) })),
-          }));
+        if (grid.cols === 1) {
+          for (const i of grid.cells) if (i !== null) out.push(new Paragraph({ children: cellRuns(i), indent: { left }, spacing: { after: 40 } }));
+        } else {
+          const cells = grid.cells.map((i) => [new Paragraph({ children: i === null ? [] : cellRuns(i), spacing: { after: 40 } })]);
+          out.push(layoutTable(cells, grid.cols, right, left));
         }
         if (answerKey && correct !== null) addRich(hasImage(items[correct]) ? '' : items[correct], { italics: true }, [w.run(`${w.L('answer')}: (${letter(correct)}) `, { bold: true })]);
         break;
@@ -240,10 +268,17 @@ function fieldBlocks(w: DocxWriter, q: QLike, template: Template, label: string,
       case 'parts': {
         const { numbering, items } = asParts(v);
         ensureNumbered();
-        items.forEach((p, i) => {
+        const pc = Math.min(layout.partCols, Math.max(1, items.length));
+        const partBlocks = (p: (typeof items)[number], i: number, pLeft: number, pRight: number) => {
           const t = w.templates.get(p.templateId);
-          if (t) out.push(...fieldBlocks(w, p, t, partLabel(numbering, i), `[${p.marks}]`, left + INDENT, answerKey, answerSpace, false));
-        });
+          return t ? fieldBlocks(w, p, t, { label: partLabel(numbering, i), marks: `[${p.marks}]`, left: pLeft, right: pRight, bold: false, sectionLayout: o.sectionLayout }, answerKey, answerSpace) : [];
+        };
+        if (pc === 1) items.forEach((p, i) => out.push(...partBlocks(p, i, left + INDENT, right)));
+        else {
+          // Parts side by side: each cell is its own little question with label and marks.
+          const cellWidth = Math.floor((right - left) / pc);
+          out.push(layoutTable(items.map((p, i) => { const b = partBlocks(p, i, INDENT, cellWidth - 120); return b.length ? b : [new Paragraph({ children: [] })]; }), pc, right, left));
+        }
         break;
       }
     }
@@ -252,11 +287,12 @@ function fieldBlocks(w: DocxWriter, q: QLike, template: Template, label: string,
   return out;
 }
 
-function questionBlocks(w: DocxWriter, { number, question, template, marks, alt }: ResolvedQuestion, answerKey: boolean, answerSpace: boolean) {
-  const out = fieldBlocks(w, question, template, `${number}.`, `[${marks}]`, INDENT, answerKey, answerSpace);
+function questionBlocks(w: DocxWriter, { number, question, template, marks, alt, sectionLayout }: ResolvedQuestion, answerKey: boolean, answerSpace: boolean) {
+  const base = { left: INDENT, right: w.width, sectionLayout };
+  const out = fieldBlocks(w, question, template, { ...base, label: `${number}.`, marks: `[${marks}]` }, answerKey, answerSpace);
   if (alt) {
     out.push(w.para([w.run(w.L('or'), { bold: true })], { alignment: AlignmentType.CENTER, spacing: { before: 60, after: 60 } }));
-    out.push(...fieldBlocks(w, alt.question, alt.template, '', '', INDENT, answerKey, answerSpace));
+    out.push(...fieldBlocks(w, alt.question, alt.template, { ...base, label: '', marks: '' }, answerKey, answerSpace));
   }
   return out;
 }
@@ -296,12 +332,17 @@ export async function renderPaperDocx(paper: Paper, liveDb: DB, answerKey: boole
     children.push(w.para([w.run(`${w.L('instructions')}:`, { bold: true })], { spacing: { before: 160, after: 40 } }));
     children.push(...plain(paper.instructions.trim(), w.scaled(0.92)));
   }
+  // The header spans the page; questions go in a second section that may have two columns.
+  const header = children;
+  const body: (Paragraph | Table)[] = [];
   for (const sec of sections) {
+    const children = body;
     if (sec.title || sec.marksLabel) {
       children.push(
         w.para([w.run(sec.title, { bold: true }), w.run('\t'), w.run(sec.marksLabel, { bold: true })], {
           spacing: { before: 240, after: 60 },
-          tabStops: [{ type: TabStopType.RIGHT, position: CONTENT_WIDTH }],
+          keepNext: true,
+          tabStops: [{ type: TabStopType.RIGHT, position: w.width }],
           border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: '000000', space: 1 } },
         }),
       );
@@ -310,17 +351,21 @@ export async function renderPaperDocx(paper: Paper, liveDb: DB, answerKey: boole
     if (instr) children.push(...plain(instr, { italics: true, ...w.scaled(0.92) }));
     for (const q of sec.questions) children.push(...questionBlocks(w, q, answerKey, paper.answerSpace));
   }
-  children.push(center([w.run(w.L('end'), { bold: true })]));
+  body.push(center([w.run(w.L('end'), { bold: true })]));
 
   const style = effectiveStyle(s.paperStyle, paper.style);
+  const page = { size: { width: 11906, height: 16838 }, margin: { top: 1000, bottom: 1000, left: 1000, right: 1000 } };
   const doc = new Document({
     creator: 'QMaker',
     title: paper.examName,
     styles: { default: { document: { paragraph: { spacing: { line: Math.round(240 * style.lineHeight / 1.15) } } } } },
-    sections: [{
-      properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1000, bottom: 1000, left: 1000, right: 1000 } } },
-      children,
-    }],
+    sections: [
+      { properties: { page }, children: header },
+      {
+        properties: { page, type: SectionType.CONTINUOUS, column: paper.pageCols === 2 ? { count: 2, space: COLUMN_GAP, separate: true, equalWidth: true } : { count: 1 } },
+        children: body,
+      },
+    ],
   });
   const blob = await Packer.toBlob(doc);
   return new Uint8Array(await blob.arrayBuffer());

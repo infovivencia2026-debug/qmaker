@@ -339,6 +339,7 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
               <RichInput value={paper.instructions} placeholder="Instructions (optional)" onChange={(v) => setPaper({ instructions: v })} />
             </div>
 
+            <div className={paper.pageCols === 2 ? 'cols2' : ''}>
             {resolved.sections.map((rs) => {
               const section = paper.sections.find((s) => s.id === rs.id)!;
               const isSel = sel.kind === 'section' && sel.id === rs.id;
@@ -367,9 +368,11 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
                         sharedCount={papersUsing(db, rq.question.id, paper.id).length}
                         answerSpace={paper.answerSpace}
                         bilingual={!!paper.bilingual}
+                        pageCols={paper.pageCols}
                         selected={sel.kind === 'question' && sel.id === rq.question.id}
                         onSelect={() => select({ kind: 'question', sectionId: rs.id, id: rq.question.id })}
                         onData={(data) => setQuestion(rq.question.id, { data })}
+                        onLayout={(layout) => setQuestion(rq.question.id, { layout })}
                         onMove={(d) => setSection(rs.id, { questionIds: move(section.questionIds, section.questionIds.indexOf(rq.question.id), d) })}
                         onDuplicate={() => duplicate(rs.id, rq.question.id)}
                         onRemove={() => removeFromPaper(rs.id, rq.question.id)}
@@ -382,9 +385,11 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
                             which="alt"
                             answerSpace={paper.answerSpace}
                             bilingual={!!paper.bilingual}
+                            pageCols={paper.pageCols}
                             selected={sel.kind === 'question' && sel.id === rq.alt.question.id}
                             onSelect={() => select({ kind: 'question', sectionId: rs.id, id: rq.alt!.question.id })}
                             onData={(data) => setQuestion(rq.alt!.question.id, { data })}
+                            onLayout={(layout) => setQuestion(rq.alt!.question.id, { layout })}
                             onRemove={() => setAlternative(rs.id, rq.question.id, null)}
                           />
                         </>
@@ -398,6 +403,7 @@ export default function PaperEditor({ id, onBack }: { id: string; onBack: () => 
                 </div>
               );
             })}
+            </div>
             <button className="appender sec-app" onMouseDown={(e) => e.stopPropagation()} onClick={addSection}><span>+</span> {t('addSection')}</button>
             <div className="end">{L('end')}</div>
           </div>

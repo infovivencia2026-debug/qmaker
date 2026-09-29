@@ -1,6 +1,6 @@
-import type { DB, Paper, Question, Template } from '../shared/types';
+import type { DB, Paper, Question, QuestionLayout, Template } from '../shared/types';
 import { esc, letter, seededOrder } from './util';
-import { asOptions, asPairs, asParts, asText, fieldValue, lockedView, optionColumns, partLabel, resolvePaper, secondKey, sectionInstruction, type ResolvedQuestion } from './paper';
+import { asOptions, asPairs, asParts, asText, fieldValue, effectiveLayout, lockedView, optionColumns, optionGrid, partLabel, resolvePaper, secondKey, sectionInstruction, type ResolvedQuestion } from './paper';
 import { hasImage, richHtml } from './rich';
 import { effectiveStyle, styleVars } from './fonts';
 import { paperLabels, type LabelKey } from './labels';
@@ -9,6 +9,8 @@ import { paperLabels, type LabelKey } from './labels';
 export const PAPER_CSS = `
 .qp { --fs: 12pt; --lh: 1.45; --gap: 6pt; font-size: var(--fs); line-height: var(--lh); color: #000; background: #fff; }
 .qp * { box-sizing: border-box; }
+/* Any column combination is allowed; in very narrow cells long words wrap instead of overlapping the marks. */
+.qp .q > div:nth-child(2), .qp .opts > div, .qp table.pairs td { overflow-wrap: break-word; }
 .qp .hd { text-align: center; border-bottom: 2px solid #000; padding-bottom: 6px; margin-bottom: 8px; }
 .qp .hd-top { display: flex; align-items: center; justify-content: center; gap: 12px; }
 .qp .hd img { max-height: 60px; max-width: 80px; }
@@ -31,9 +33,14 @@ export const PAPER_CSS = `
 .qp .opts { display: grid; gap: 2px 12px; margin-top: 3px; }
 .qp .opts > div { white-space: pre-wrap; }
 .qp .t2 { margin-top: 1pt; }
+.qp .ol { white-space: nowrap; }
 .qp .opts.c4 { grid-template-columns: repeat(4, 1fr); }
 .qp .opts.c2 { grid-template-columns: repeat(2, 1fr); }
 .qp .opts.c1 { grid-template-columns: 1fr; }
+.qp .parts-grid { display: grid; gap: 0 14px; }
+.qp .cols2 { column-count: 2; column-gap: 8mm; column-rule: 1px solid #999; }
+.qp .cols2 .sec:first-child { margin-top: 0; }
+.qp .cols2 .sec-h, .qp .cols2 .q { break-inside: avoid; }
 .qp .ok { font-weight: 700; text-decoration: underline; }
 .qp table.pairs { border-collapse: collapse; margin-top: 4px; width: 90%; }
 .qp table.pairs td, .qp table.pairs th { border: 1px solid #000; padding: 2px 8px; text-align: left; vertical-align: top; white-space: pre-wrap; }
@@ -55,7 +62,7 @@ export const PAPER_CSS = `
 .qp .opts img.qi.al-left, .qp .opts img.qi.al-center, .qp table.pairs img.qi { margin: 2px 0; }
 `;
 
-type QLike = Pick<Question, 'id' | 'data'>;
+type QLike = Pick<Question, 'id' | 'data'> & { layout?: QuestionLayout };
 
 const grid = (num: string, body: string, marks: string, cls = '') =>
   `<div class="q ${cls}"><div class="qn">${num}</div><div>${body}</div><div class="qm">${marks}</div></div>`;
@@ -66,6 +73,7 @@ interface Ctx {
   answerSpace: boolean;
   bilingual: boolean;
   L: (k: LabelKey) => string;
+  sectionLayout?: QuestionLayout;
 }
 
 /** Built-in answer fields print as "Answer"/"Model answer" in the paper's language; custom ones keep their label. */
@@ -74,6 +82,7 @@ export const answerLabel = (template: Template, label: string, L: (k: LabelKey) 
 
 function renderFields(q: QLike, template: Template, ctx: Ctx): string {
   const { db, answerKey, answerSpace, bilingual, L } = ctx;
+  const layout = effectiveLayout(q.layout, ctx.sectionLayout);
   const rich = (s: string) => richHtml(s, db.images);
   const parts: string[] = [];
   for (const f of template.fields) {
@@ -98,10 +107,12 @@ function renderFields(q: QLike, template: Template, ctx: Ctx): string {
       case 'options': {
         const { items, items2, correct } = asOptions(v);
         const second = (i: number) => (bilingual && items2?.[i] ? `\n${rich(items2[i])}` : '');
-        const cells = items
-          .map((it, i) => `<div class="${answerKey && i === correct ? 'ok' : ''}">(${letter(i)}) ${rich(it)}${second(i)}</div>`)
+        const cols = layout.optionCols || optionColumns(bilingual ? [...items, ...(items2 ?? [])] : items);
+        const grid_ = optionGrid(items.length, cols, layout.optionOrder);
+        const cells = grid_.cells
+          .map((i) => (i === null ? '<div></div>' : `<div class="${answerKey && i === correct ? 'ok' : ''}"><span class="ol">(${letter(i)})</span> ${rich(items[i])}${second(i)}</div>`))
           .join('');
-        parts.push(`<div class="opts c${optionColumns(bilingual ? [...items, ...(items2 ?? [])] : items)}">${cells}</div>`);
+        parts.push(`<div class="opts" style="grid-template-columns: repeat(${grid_.cols}, minmax(0, 1fr))">${cells}</div>`);
         // Picture options: the underlined option is enough, don't print the picture twice.
         if (answerKey && correct !== null) parts.push(`<div class="ans"><b>${L('answer')}:</b> (${letter(correct)}) ${hasImage(items[correct]) ? '' : rich(items[correct])}</div>`);
         break;
@@ -126,10 +137,12 @@ function renderFields(q: QLike, template: Template, ctx: Ctx): string {
       }
       case 'parts': {
         const { numbering, items } = asParts(v);
-        items.forEach((p, i) => {
+        const cells = items.map((p, i) => {
           const t = db.templates.find((x) => x.id === p.templateId);
-          if (t) parts.push(grid(partLabel(numbering, i), renderFields(p, t, ctx), `[${p.marks}]`, 'part'));
+          return t ? grid(partLabel(numbering, i), renderFields(p, t, ctx), `[${p.marks}]`, 'part') : '';
         });
+        const pc = Math.min(layout.partCols, Math.max(1, items.length));
+        parts.push(pc > 1 ? `<div class="parts-grid" style="grid-template-columns: repeat(${pc}, minmax(0, 1fr))">${cells.join('')}</div>` : cells.join(''));
         break;
       }
     }
@@ -137,7 +150,8 @@ function renderFields(q: QLike, template: Template, ctx: Ctx): string {
   return parts.join('');
 }
 
-function renderQuestion({ number, question: q, template, marks, alt }: ResolvedQuestion, ctx: Ctx) {
+function renderQuestion({ number, question: q, template, marks, alt, sectionLayout }: ResolvedQuestion, parent: Ctx) {
+  const ctx = { ...parent, sectionLayout };
   const main = grid(`${number}.`, renderFields(q, template, ctx), `[${marks}]`);
   if (!alt) return main;
   return `<div class="either">${main}<div class="or">${ctx.L('or')}</div>${grid('', renderFields(alt.question, alt.template, ctx), '')}</div>`;
@@ -179,5 +193,6 @@ export function renderPaperHtml(paper: Paper, liveDb: DB, answerKey: boolean) {
     })
     .join('');
   const warn = missing ? `<p class="warn">${missing} question(s) in this paper no longer exist in the bank.</p>` : '';
-  return `<div class="qp" style="${styleVars(style)}">${header}${instructions}${warn}${body}<div class="end">${L('end')}</div></div>`;
+  const bodyHtml = paper.pageCols === 2 ? `<div class="cols2">${body}</div>` : body;
+  return `<div class="qp" style="${styleVars(style)}">${header}${instructions}${warn}${bodyHtml}<div class="end">${L('end')}</div></div>`;
 }

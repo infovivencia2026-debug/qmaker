@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import type { OptionsValue, PairsValue, Part, PartNumbering, Question, Template } from '../../shared/types';
+import type { OptionsValue, PairsValue, Part, PartNumbering, Question, QuestionLayout, Template } from '../../shared/types';
 import { isGroupTemplate } from '../../shared/templates';
-import { asOptions, asParts, asText, fieldValue, optionColumns, partLabel, secondKey, type ResolvedQuestion } from '../../lib/paper';
+import { MIN_OPTION_MM, MIN_PART_MM, asOptions, asParts, asText, effectiveLayout, questionWidthMm, fieldValue, optionColumns, optionGrid, partLabel, secondKey, type ResolvedQuestion } from '../../lib/paper';
 import { letter, uid } from '../../lib/util';
 import { useStore } from '../../store';
 import RichInput from '../RichInput';
@@ -16,9 +16,27 @@ export function blankPart(t: Template): Part {
 }
 
 /** Fields of a question (or a part) edited in place on the page. */
-export function InlineFields({ q, template, selected, answerSpace, bilingual = false, onData }: {
+/** Small segmented control used for layout choices on the page. */
+function Seg<T extends string | number>({ label, value, options, onChange }: { label: string; value: T; options: [T, string][]; onChange: (v: T) => void }) {
+  return (
+    <span className="seg">
+      <span className="seg-l">{label}</span>
+      {options.map(([v, l]) => (
+        <button key={String(v)} className={`mini ${value === v ? 'on' : ''}`} onClick={() => onChange(v)}>{l}</button>
+      ))}
+    </span>
+  );
+}
+
+export function InlineFields({ q, template, selected, answerSpace, bilingual = false, onData, layout: own, sectionLayout, onLayout, widthMm }: {
   q: Pick<Question, 'id' | 'data'>; template: Template; selected: boolean; answerSpace: boolean; bilingual?: boolean; onData: (d: Data) => void;
+  layout?: QuestionLayout; sectionLayout?: QuestionLayout; onLayout?: (l: QuestionLayout) => void;
+  /** Space available on the printed page, to warn about layouts that are too tight. */
+  widthMm?: number;
 }) {
+  const width = widthMm ?? questionWidthMm();
+  const layout = effectiveLayout(own, sectionLayout);
+  const setLayout = (patch: Partial<QuestionLayout>) => onLayout?.({ ...own, ...patch });
   const { db } = useStore();
   const [adding, setAdding] = useState(false);
   const set = (key: string, v: unknown) => onData({ ...q.data, [key]: v });
@@ -43,10 +61,16 @@ export function InlineFields({ q, template, selected, answerSpace, bilingual = f
             const o = asOptions(v);
             const setO = (next: Partial<OptionsValue>) => set(f.key, { ...o, ...next });
             const items2 = o.items.map((_, i) => o.items2?.[i] ?? '');
+            const printGrid = optionGrid(o.items.length, layout.optionCols || optionColumns(bilingual ? [...o.items, ...items2] : o.items), layout.optionOrder);
+            const optionsTooNarrow = width / printGrid.cols < MIN_OPTION_MM;
+            // While selected, options too narrow to type in reflow to columns that fit; print is unchanged.
+            const editGrid = selected && optionsTooNarrow
+              ? optionGrid(o.items.length, Math.max(1, Math.floor(width / MIN_OPTION_MM)), layout.optionOrder)
+              : printGrid;
             return (
               <div key={f.key}>
-                <div className={`opts c${bilingual ? Math.min(2, optionColumns([...o.items, ...items2])) : optionColumns(o.items)}`}>
-                  {o.items.map((it, i) => (
+                <div className="opts" style={{ gridTemplateColumns: `repeat(${editGrid.cols}, minmax(0, 1fr))` }}>
+                  {editGrid.cells.map((i, cell) => i === null ? <div key={`empty-${cell}`} /> : (() => { const it = o.items[i]; return (
                     <div key={i} className={`opt ${selected && o.correct === i ? 'ok-edit' : ''}`}>
                       <button className="optl" title="Mark as correct answer" onClick={() => setO({ correct: o.correct === i ? null : i })}>({letter(i)})</button>
                       <div className="grow opt-texts">
@@ -63,12 +87,20 @@ export function InlineFields({ q, template, selected, answerSpace, bilingual = f
                         })}>×</button>
                       )}
                     </div>
-                  ))}
+                  ); })())}
                 </div>
                 {selected && (
                   <div className="blk-hint">
                     {o.items.length < 8 && <button className="mini" onClick={() => setO({ items: [...o.items, ''], items2: [...items2, ''] })}>+ option</button>}
                     <span>Click a letter to mark the correct answer{o.correct === null ? ' — none marked yet' : ''}.</span>
+                  </div>
+                )}
+                {selected && onLayout && (
+                  <div className="blk-hint layout-bar">
+                    <Seg label="Columns" value={own?.optionCols ?? 0} onChange={(v) => setLayout({ optionCols: v || undefined })}
+                      options={[[0, sectionLayout?.optionCols ? `Section (${sectionLayout.optionCols})` : 'Auto'], [1, '1'], [2, '2'], [3, '3'], [4, '4'], [5, '5'], [6, '6']]} />
+                    <Seg label="Order" value={layout.optionOrder} onChange={(v) => setLayout({ optionOrder: v })} options={[['across', 'a b →'], ['down', 'a ↓ b']]} />
+                    {optionsTooNarrow && <span className="warn-text">⚠ Too narrow for this page — option text will wrap when printed. Shown wider while editing.</span>}
                   </div>
                 )}
               </div>
@@ -107,14 +139,19 @@ export function InlineFields({ q, template, selected, answerSpace, bilingual = f
             const setParts = (items: Part[], numbering: PartNumbering = pv.numbering) => set(f.key, { numbering, items });
             const setPart = (i: number, patch: Partial<Part>) => setParts(pv.items.map((p, j) => (j === i ? { ...p, ...patch } : p)));
             const choices = db.templates.filter((t) => !isGroupTemplate(t));
+            const printCols = Math.min(layout.partCols, Math.max(1, pv.items.length));
+            const tooNarrow = printCols > 1 && width / printCols < MIN_PART_MM;
+            // Parts too narrow to type in are stacked while this question is being edited; print is unchanged.
+            const pc = selected && tooNarrow ? 1 : printCols;
             return (
               <div key={f.key} className="parts">
+                <div className={pc > 1 ? 'parts-grid' : ''} style={pc > 1 ? { gridTemplateColumns: `repeat(${pc}, minmax(0, 1fr))` } : undefined}>
                 {pv.items.map((p, i) => {
                   const t = db.templates.find((x) => x.id === p.templateId);
                   return (
                     <div key={p.id} className="q part">
                       <div className="qn">{partLabel(pv.numbering, i)}</div>
-                      <div>{t ? <InlineFields q={p} template={t} selected={selected} answerSpace={answerSpace} bilingual={bilingual} onData={(data) => setPart(i, { data })} /> : <i>missing template</i>}</div>
+                      <div>{t ? <InlineFields q={p} template={t} selected={selected} answerSpace={answerSpace} bilingual={bilingual} onData={(data) => setPart(i, { data })} layout={p.layout} sectionLayout={sectionLayout} onLayout={(l) => setPart(i, { layout: l })} widthMm={(width - 10) / pc} /> : <i>missing template</i>}</div>
                       <div className="qm part-m">
                         {selected ? (
                           <>
@@ -129,6 +166,14 @@ export function InlineFields({ q, template, selected, answerSpace, bilingual = f
                     </div>
                   );
                 })}
+                </div>
+                {selected && onLayout && pv.items.length > 1 && (
+                  <div className="blk-hint layout-bar">
+                    <Seg label="Parts side by side" value={own?.partCols ?? 0} onChange={(v) => setLayout({ partCols: v || undefined })}
+                      options={[[0, sectionLayout?.partCols ? `Section (${sectionLayout.partCols})` : 'No'], [2, '2'], [3, '3'], [4, '4']]} />
+                    {tooNarrow && <span className="warn-text">⚠ Too narrow for this page — parts will wrap when printed. Shown stacked while editing.</span>}
+                  </div>
+                )}
                 {selected && (
                   <div className="blk-hint parts-add">
                     {adding ? (
@@ -202,10 +247,12 @@ interface Props {
   /** Number of other papers that also use this question. */
   sharedCount?: number;
   bilingual?: boolean;
+  onLayout?: (l: QuestionLayout) => void;
+  pageCols?: number;
 }
 
 /** A question edited in place on the page, styled like the printed paper. */
-export default function QuestionBlock({ rq, which = 'main', selected, answerSpace, onSelect, onData, onMove, onDuplicate, onRemove, sharedCount = 0, bilingual = false }: Props) {
+export default function QuestionBlock({ rq, which = 'main', selected, answerSpace, onSelect, onData, onMove, onDuplicate, onRemove, sharedCount = 0, bilingual = false, onLayout, pageCols }: Props) {
   const isAlt = which === 'alt';
   const q = isAlt ? rq.alt!.question : rq.question;
   const template = isAlt ? rq.alt!.template : rq.template;
@@ -223,7 +270,7 @@ export default function QuestionBlock({ rq, which = 'main', selected, answerSpac
         </div>
       )}
       <div className="qn">{isAlt ? '' : `${rq.number}.`}</div>
-      <div><InlineFields q={q} template={template} selected={selected} answerSpace={answerSpace} bilingual={bilingual} onData={onData} /></div>
+      <div><InlineFields q={q} template={template} selected={selected} answerSpace={answerSpace} bilingual={bilingual} onData={onData} layout={q.layout} sectionLayout={rq.sectionLayout} onLayout={onLayout} widthMm={questionWidthMm(pageCols)} /></div>
       <div className="qm">{isAlt ? '' : `[${rq.marks}]`}</div>
     </div>
   );

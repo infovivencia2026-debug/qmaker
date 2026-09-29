@@ -1,6 +1,6 @@
 import { maxImageWidth, plainText } from './rich';
 import { paperLabels, type PaperLang } from './labels';
-import type { Section, DB, FieldDef, OptionsValue, PairsValue, Paper, Part, PartNumbering, PartsValue, Question, Template } from '../shared/types';
+import type { QuestionLayout, Section, DB, FieldDef, OptionsValue, PairsValue, Paper, Part, PartNumbering, PartsValue, Question, Template } from '../shared/types';
 
 /** Everything a renderer (HTML or DOCX) needs, resolved once. */
 export interface ResolvedQuestion {
@@ -11,6 +11,8 @@ export interface ResolvedQuestion {
   marks: number;
   /** Either/or: the "OR" question printed under the same number. */
   alt?: { question: Question; template: Template };
+  /** The section's default layout, used where the question sets none. */
+  sectionLayout?: QuestionLayout;
 }
 
 export interface ResolvedSection {
@@ -77,7 +79,7 @@ export function resolvePaper(paper: Paper, liveDb: DB) {
       }
       const altQ = s.alternatives?.[id] ? questions.get(s.alternatives[id]) : undefined;
       const altT = altQ && templates.get(altQ.templateId);
-      qs.push({ number: ++number, question, template, marks: s.marksEach || question.marks, alt: altQ && altT ? { question: altQ, template: altT } : undefined });
+      qs.push({ number: ++number, question, template, marks: s.marksEach || question.marks, alt: altQ && altT ? { question: altQ, template: altT } : undefined, sectionLayout: s.layout });
     }
     const attempt = s.attempt && s.attempt < qs.length ? s.attempt : 0;
     const counted = attempt || qs.length;
@@ -148,6 +150,35 @@ export function optionColumns(items: string[]) {
   if (img) return img <= 35 ? 4 : img <= 80 ? 2 : 1;
   const longest = Math.max(0, ...items.map((s) => plainText(s).length));
   return longest <= 18 ? 4 : longest <= 40 ? 2 : 1;
+}
+
+/** Question layout first, then the section's, then automatic. */
+export function effectiveLayout(own?: QuestionLayout, section?: QuestionLayout) {
+  return {
+    optionCols: own?.optionCols || section?.optionCols || 0,
+    optionOrder: own?.optionOrder ?? section?.optionOrder ?? 'across',
+    partCols: own?.partCols || section?.partCols || 1,
+  } as const;
+}
+
+/** Printable width in mm for a question's content: A4 minus margins, one page column, minus the number column. */
+export const questionWidthMm = (pageCols?: number) => (pageCols === 2 ? 84 : 180) - 12;
+
+/** Narrowest readable cells; below these, text starts breaking inside words. */
+export const MIN_OPTION_MM = 24;
+export const MIN_PART_MM = 42;
+
+/** Final option grid: columns, and for each grid cell (row-major) which option goes there. */
+export function optionGrid(count: number, cols: number, order: 'across' | 'down') {
+  cols = Math.max(1, Math.min(cols, count || 1));
+  const rows = Math.ceil(count / cols);
+  const cells: (number | null)[] = [];
+  for (let r = 0; r < rows; r++)
+    for (let c = 0; c < cols; c++) {
+      const i = order === 'down' ? c * rows + r : r * cols + c;
+      cells.push(i < count ? i : null);
+    }
+  return { cols, rows, cells };
 }
 
 /** Short one-line summary for lists. */

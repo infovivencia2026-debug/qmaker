@@ -36,6 +36,7 @@ export interface Part {
   templateId: string;
   marks: number;
   data: Record<string, unknown>;
+  layout?: QuestionLayout;
 }
 
 export type PartNumbering = 'a' | 'i' | '1';
@@ -43,6 +44,16 @@ export type PartNumbering = 'a' | 'i' | '1';
 export interface PartsValue {
   numbering: PartNumbering;
   items: Part[];
+}
+
+/** How a question (or part) arranges its pieces. Unset values fall back to the section, then to automatic. */
+export interface QuestionLayout {
+  /** MCQ option columns, 1–6 (unset = automatic). */
+  optionCols?: number;
+  /** Fill options across rows (a b / c d) or down columns (a c / b d). */
+  optionOrder?: 'across' | 'down';
+  /** Sub-question parts side by side, 1–4 columns. */
+  partCols?: number;
 }
 
 export type Difficulty = 'easy' | 'medium' | 'hard';
@@ -56,6 +67,7 @@ export interface Question {
   difficulty: Difficulty;
   marks: number;
   data: Record<string, unknown>;
+  layout?: QuestionLayout;
   createdAt: number;
   updatedAt: number;
 }
@@ -73,6 +85,8 @@ export interface Section {
   marksEach?: number;
   /** "Answer any N" — only the best N count towards the total (0 = all compulsory). */
   attempt?: number;
+  /** Default layout for every question in this section (a question's own layout wins). */
+  layout?: QuestionLayout;
   /** Either/or choice: question id in questionIds → its "OR" alternative's id. */
   alternatives?: Record<string, string>;
 }
@@ -90,6 +104,8 @@ export interface Paper {
   style?: Partial<PaperStyle>;
   /** Language of printed words like "Class", "Max. Marks", "OR". */
   labelLang?: import('../lib/labels').PaperLang;
+  /** Page columns for the questions (the header always spans the page). */
+  pageCols?: 1 | 2;
   /** Print each question's second-language version under it. */
   bilingual?: boolean;
   /** A locked (final) paper prints from these copies, so later edits in the bank never change it. */

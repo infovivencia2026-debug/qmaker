@@ -36,7 +36,7 @@ describe('bilingual questions', () => {
   it('prints the second language under the question and each option when enabled', () => {
     const html = renderPaperHtml(paper([section([a.id])], { bilingual: true }), db([a]), false);
     expect(html).toContain('प्रकाश की चाल?');
-    expect(html).toContain('(a) Fast\nतेज़');
+    expect(html).toContain('(a)</span> Fast\nतेज़');
   });
 
   it('leaves the second language out when the paper is not bilingual', () => {

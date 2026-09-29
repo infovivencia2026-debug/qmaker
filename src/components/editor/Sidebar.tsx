@@ -22,6 +22,17 @@ function Bars({ title, rows, total }: { title: string; rows: DistRow[]; total: n
   );
 }
 
+/** Row of toggle buttons for a small set of choices. */
+function Choice<T extends string | number>({ value, options, onChange }: { value: T; options: [T, string][]; onChange: (v: T) => void }) {
+  return (
+    <div className="choice">
+      {options.map(([v, l]) => (
+        <button key={String(v)} className={value === v ? 'on' : ''} onClick={() => onChange(v)}>{l}</button>
+      ))}
+    </div>
+  );
+}
+
 function PaperPanel({ paper, setPaper, onSelectSection }: { paper: Paper; setPaper: (p: Partial<Paper>) => void; onSelectSection: (id: string) => void }) {
   const { db, t, update, notify } = useStore();
   const style = effectiveStyle(db.settings.paperStyle, paper.style);
@@ -106,7 +117,10 @@ function PaperPanel({ paper, setPaper, onSelectSection }: { paper: Paper; setPap
 
       <div className="panel">
         <div className="panel-h">{t('printing')}</div>
-        <label className="check"><input type="checkbox" checked={paper.answerSpace} onChange={(e) => setPaper({ answerSpace: e.target.checked })} /> {t('answerSpace')}</label>
+        <div className="field-l">Page columns</div>
+        <Choice value={paper.pageCols ?? 1} onChange={(v) => setPaper({ pageCols: v === 2 ? 2 : undefined })} options={[[1, '1 column'], [2, '2 columns']]} />
+        <div className="muted">2 columns suits MCQ and objective papers. The header always spans the page.</div>
+        <label className="check" style={{ marginTop: 8 }}><input type="checkbox" checked={paper.answerSpace} onChange={(e) => setPaper({ answerSpace: e.target.checked })} /> {t('answerSpace')}</label>
       </div>
     </>
   );
@@ -158,6 +172,19 @@ function SectionPanel({ paper, section, setSection, onAutoFill, onMove, onDelete
           ✨ {t('autoFill')}
         </button>
         <div className="muted">Picks unused {paper.subject || ''} questions of this type, spread across chapters.</div>
+      </div>
+      <div className="panel">
+        <div className="panel-h">Layout for this section</div>
+        <div className="muted">Applies to every question here, unless a question sets its own (select it on the page).</div>
+        <div className="field-l">MCQ option columns</div>
+        <Choice value={section.layout?.optionCols ?? 0} onChange={(v) => setSection({ layout: { ...section.layout, optionCols: v || undefined } })}
+          options={[[0, 'Auto'], [1, '1'], [2, '2'], [3, '3'], [4, '4'], [5, '5'], [6, '6']]} />
+        <div className="field-l">Option order</div>
+        <Choice value={section.layout?.optionOrder ?? 'across'} onChange={(v) => setSection({ layout: { ...section.layout, optionOrder: v } })}
+          options={[['across', 'a b → across'], ['down', 'a ↓ b down']]} />
+        <div className="field-l">Parts side by side</div>
+        <Choice value={section.layout?.partCols ?? 1} onChange={(v) => setSection({ layout: { ...section.layout, partCols: v > 1 ? v : undefined } })}
+          options={[[1, 'No'], [2, '2'], [3, '3'], [4, '4']]} />
       </div>
       <div className="panel row">
         <button onClick={() => onMove(-1)}>↑ Move up</button>
